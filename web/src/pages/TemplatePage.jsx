@@ -548,7 +548,7 @@ export default function TemplatePage() {
         if (!isSetupComplete(normalized, normalized.selectedWorkingLocationId)) {
           setNotice({
             tone: 'pending',
-            text: 'Setup wizard must be completed first. Go to Settings and complete all 3 setup steps to continue.'
+            text: 'Configuration must be completed first. Go to Settings and complete all 3 setup steps to continue.'
           });
           return;
         }
@@ -1148,7 +1148,7 @@ export default function TemplatePage() {
       <section className="content">
         <section className="panel step-panel">
           <div className="result-banner pending">
-            Setup wizard must be completed first. Go to Settings and complete all 3 setup steps to
+            Configuration must be completed first. Go to Settings and complete all 3 setup steps to
             continue.
           </div>
         </section>
@@ -1420,7 +1420,7 @@ export default function TemplatePage() {
           <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Saved Schemes</h4>
-              <button onClick={() => setShowSchemesModal(false)}>Close</button>
+              <ModalCloseButton onClick={() => setShowSchemesModal(false)} />
             </div>
             <div className="scheme-preset-row scheme-preset-row-compact" style={{ marginTop: 8 }}>
               <input
@@ -1459,7 +1459,7 @@ export default function TemplatePage() {
           <section className="scheme-modal project-types-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Edit Project Types</h4>
-              <button onClick={() => setShowProjectTypesModal(false)}>Close</button>
+              <ModalCloseButton onClick={() => setShowProjectTypesModal(false)} />
             </div>
 
             <section className="project-types-add-row">
@@ -1758,5 +1758,18 @@ function EntryList({ entries, selectedEntry, onSelect, onOpenFromEntry, emptyTex
       </ul>
       {hasOverflow ? <div className="entry-scroll-hint">Scroll for more</div> : null}
     </div>
+  );
+}
+
+function ModalCloseButton({ onClick }) {
+  return (
+    <button
+      className="setup-icon-button setup-icon-button-danger"
+      onClick={onClick}
+      title="Close"
+      aria-label="Close"
+    >
+      <XCircle size={20} weight="duotone" aria-hidden="true" />
+    </button>
   );
 }

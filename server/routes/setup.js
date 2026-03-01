@@ -8,10 +8,10 @@ import {
   generateRemoteKeypairWithPassword,
   installPeerKeyWithPassword,
   testPeerConnection,
-  removeToolKeysFromSystems,
   getContainerKeyStatus,
   testConnectionWithPassword,
-  refreshContainerKnownHosts
+  refreshContainerKnownHosts,
+  clearToolKeysWithPasswords
 } from '../services/ssh.js';
 import { saveConfig, loadConfig } from '../services/configStore.js';
 import { adminGuard } from '../services/auth.js';
@@ -19,6 +19,35 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const router = Router();
+const configArchiveDir = path.resolve('data/config');
+const defaultConfigPath = path.resolve('server/config/defaultConfig.json');
+
+function sanitizeConfigFilename(input) {
+  const raw = String(input || '').trim();
+  const base = raw.replace(/\.json$/i, '');
+  const safe = base.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '');
+  return `${safe || `config_${Date.now()}`}.json`;
+}
+
+async function loadDefaultConfig() {
+  const defaultsRaw = await fs.readFile(defaultConfigPath, 'utf8');
+  return JSON.parse(defaultsRaw);
+}
+
+async function ensureConfigArchiveDir() {
+  await fs.mkdir(configArchiveDir, { recursive: true });
+}
+
+async function ensureDefaultStoredConfig() {
+  await ensureConfigArchiveDir();
+  const defaultStoredPath = path.join(configArchiveDir, 'default.json');
+  try {
+    await fs.access(defaultStoredPath);
+  } catch {
+    const defaults = await loadDefaultConfig();
+    await fs.writeFile(defaultStoredPath, JSON.stringify(defaults, null, 2), 'utf8');
+  }
+}
 
 function extractTargetPayload(body = {}) {
   return {
@@ -210,62 +239,136 @@ router.post('/peer-trust/working-to-storage', adminGuard, handleWorkingToStorage
 router.post('/config', adminGuard, async (req, res) => {
   try {
     const current = await loadConfig();
+    const { configName, ...incoming } = req.body || {};
     const saved = await saveConfig({
       ...current,
-      ...req.body
+      ...incoming
     });
-    res.json({ ok: true, config: saved });
+    await ensureDefaultStoredConfig();
+    await fs.writeFile(path.join(configArchiveDir, 'latest.json'), JSON.stringify(saved, null, 2), 'utf8');
+    let storedAs = null;
+    if (String(configName || '').trim()) {
+      storedAs = sanitizeConfigFilename(configName);
+      await fs.writeFile(path.join(configArchiveDir, storedAs), JSON.stringify(saved, null, 2), 'utf8');
+    }
+    res.json({ ok: true, config: saved, storedAs });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
   }
 });
 
-router.post('/clear-config', adminGuard, async (req, res) => {
+router.get('/configs', adminGuard, async (req, res) => {
   try {
-    const removeKeys = Boolean(req.body?.removeKeys);
-    const current = await loadConfig();
-    const defaultsRaw = await fs.readFile(path.resolve('server/config/defaultConfig.json'), 'utf8');
-    const defaults = JSON.parse(defaultsRaw);
+    await ensureDefaultStoredConfig();
+    const entries = await fs.readdir(configArchiveDir, { withFileTypes: true });
+    const files = await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+        .map(async (entry) => {
+          const fullPath = path.join(configArchiveDir, entry.name);
+          const stat = await fs.stat(fullPath);
+          return {
+            name: entry.name,
+            sizeBytes: stat.size,
+            modifiedAt: stat.mtime.toISOString()
+          };
+        })
+    );
 
-    const warnings = [];
+    files.sort((a, b) => String(b.modifiedAt).localeCompare(String(a.modifiedAt)));
+    return res.json({ ok: true, configs: files });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
 
-    if (removeKeys) {
-      const storageTarget = {
-        host: current?.storageLocation?.host || '',
-        port: Number(current?.storageLocation?.port || 22),
-        username: current?.storageLocation?.username || ''
-      };
-      const working = Array.isArray(current?.workingLocations) ? current.workingLocations[0] : null;
-      const workingTarget = {
-        host: working?.host || '',
-        port: Number(working?.port || 22),
-        username: working?.username || ''
-      };
+router.post('/configs/load', adminGuard, async (req, res) => {
+  try {
+    await ensureDefaultStoredConfig();
+    const requested = sanitizeConfigFilename(req.body?.name);
+    const targetPath = path.join(configArchiveDir, requested);
+    const raw = await fs.readFile(targetPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const saved = await saveConfig(parsed);
+    return res.json({ ok: true, config: saved });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: `Load config failed: ${error.message}` });
+  }
+});
 
-      const cleanup = await removeToolKeysFromSystems({ storageTarget, workingTarget });
-      warnings.push(...(cleanup.warnings || []));
-
-      try {
-        await fs.rm(path.resolve('data/ssh/id_ed25519'), { force: true });
-        await fs.rm(path.resolve('data/ssh/id_ed25519.pub'), { force: true });
-      } catch (error) {
-        warnings.push(`local key cleanup: ${error.message}`);
-      }
+router.post('/configs/import', adminGuard, async (req, res) => {
+  try {
+    const payload = req.body?.config;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return res.status(400).json({ ok: false, error: 'Config payload must be a JSON object' });
     }
 
-    const nextConfig = {
-      ...defaults,
-      security: current?.security || defaults.security
-    };
+    const saved = await saveConfig(payload);
+    await ensureDefaultStoredConfig();
+    const archiveName = sanitizeConfigFilename(req.body?.name || `import_${Date.now()}.json`);
+    await fs.writeFile(path.join(configArchiveDir, archiveName), JSON.stringify(saved, null, 2), 'utf8');
+    return res.json({ ok: true, config: saved, storedAs: archiveName });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: `Import config failed: ${error.message}` });
+  }
+});
 
-    const saved = await saveConfig(nextConfig);
+router.post('/clear-config', adminGuard, async (req, res) => {
+  try {
+    const saved = await saveConfig(await loadDefaultConfig());
+    await ensureDefaultStoredConfig();
+    await fs.writeFile(path.join(configArchiveDir, 'latest.json'), JSON.stringify(saved, null, 2), 'utf8');
     res.json({
       ok: true,
       config: saved,
-      warnings
+      warnings: []
     });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+router.post('/clear-config-and-keys', adminGuard, async (req, res) => {
+  try {
+    const { storageTarget, storagePassword, workingTarget, workingPassword } = extractTargetPayload(
+      req.body
+    );
+
+    if (!storageTarget?.host || !storageTarget?.username) {
+      return res.status(400).json({ ok: false, error: 'Storage location target is required' });
+    }
+    if (!workingTarget?.host || !workingTarget?.username) {
+      return res.status(400).json({ ok: false, error: 'Working location target is required' });
+    }
+    if (!storagePassword) {
+      return res.status(400).json({ ok: false, error: 'Storage location password is required' });
+    }
+    if (!workingPassword) {
+      return res.status(400).json({ ok: false, error: 'Working location password is required' });
+    }
+
+    const keyCleanup = await clearToolKeysWithPasswords({
+      storageTarget,
+      storagePassword,
+      workingTarget,
+      workingPassword
+    });
+
+    const saved = await saveConfig(await loadDefaultConfig());
+    await ensureDefaultStoredConfig();
+    await fs.writeFile(path.join(configArchiveDir, 'latest.json'), JSON.stringify(saved, null, 2), 'utf8');
+
+    return res.json({
+      ok: true,
+      config: saved,
+      keysFound: Boolean(keyCleanup.keysFound),
+      keysCleared: Boolean(keyCleanup.cleared),
+      keyReport: keyCleanup.report || null,
+      keyDetails: keyCleanup.details || null,
+      warnings: Array.isArray(keyCleanup.warnings) ? keyCleanup.warnings : []
+    });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
   }
 });
 

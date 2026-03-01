@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CaretCircleDown, Eye, EyeClosed, GearSix, ShippingContainer } from '@phosphor-icons/react';
+import { CaretCircleDown, Eye, EyeClosed, FolderOpen, GearSix, Repeat, ShippingContainer } from '@phosphor-icons/react';
 import BrowsePage from './pages/BrowsePage.jsx';
 import SetupPage from './pages/SetupPage.jsx';
 import TemplatePage from './pages/TemplatePage.jsx';
@@ -264,8 +264,8 @@ export default function App() {
 
   const navItems = useMemo(
     () => [
-      { key: PAGE_KEYS.browse, label: 'Restore | Backup Session' },
-      { key: PAGE_KEYS.template, label: 'New Session' }
+      { key: PAGE_KEYS.browse, label: 'Restore | Backup Session', Icon: Repeat },
+      { key: PAGE_KEYS.template, label: 'New Session', Icon: FolderOpen }
     ],
     []
   );
@@ -401,6 +401,7 @@ export default function App() {
             className={activePage === item.key ? 'nav-button active' : 'nav-button'}
             onClick={() => setActivePage(item.key)}
           >
+            {item.Icon ? <item.Icon size={18} weight="duotone" aria-hidden="true" /> : null}
             {item.label}
           </button>
         ))}

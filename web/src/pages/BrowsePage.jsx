@@ -385,7 +385,7 @@ export default function BrowsePage() {
         if (!isSetupComplete(normalized, normalized.selectedWorkingLocationId)) {
           setNotice({
             tone: 'pending',
-            text: 'Setup wizard must be completed first. Go to Settings and complete all 3 setup steps to continue.'
+            text: 'Configuration must be completed first. Go to Settings and complete all 3 setup steps to continue.'
           });
           return;
         }
@@ -901,7 +901,7 @@ export default function BrowsePage() {
       <section className="content">
         <section className="panel step-panel">
           <div className="result-banner pending">
-            Setup wizard must be completed first. Go to Settings and complete all 3 setup steps to
+            Configuration must be completed first. Go to Settings and complete all 3 setup steps to
             continue.
           </div>
         </section>
@@ -919,56 +919,6 @@ export default function BrowsePage() {
           </div>
         </div>
 
-      </section>
-
-      <section className="grid two-col">
-        <BrowserPane
-          title="Storage Location"
-          currentPath={paths.storage}
-          rootPath={config.storageLocation.rootPath}
-          entries={entries.storage}
-          selectedItem={selected.storage}
-          loading={loading.storage}
-          onRefresh={() =>
-            loadLocationDirectory('storage', paths.storage, undefined, selectedWorkingLocationId)
-          }
-          onBack={() => handleBackOneLevel('storage')}
-          onRoot={() => handleGoToLocationRoot('storage')}
-          onSelect={(entry) => handleSelectEntry('storage', entry)}
-          onOpenFromEntry={(entry) => handleOpenEntry('storage', entry)}
-          searchable
-        />
-
-        <BrowserPane
-          title={
-            <select
-              className="pane-title-select"
-              value={selectedWorkingLocationId || ''}
-              onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
-              disabled={transferRunning}
-            >
-              {config.workingLocations.map((drive) => (
-                <option key={drive.id} value={drive.id}>
-                  {drive.name}
-                  {drive.isPrimary ? ' (Primary)' : ''}
-                </option>
-              ))}
-            </select>
-          }
-          currentPath={paths.working}
-          rootPath={currentWorkingLocation?.rootPath || '/mnt/media'}
-          entries={entries.working}
-          selectedItem={selected.working}
-          loading={loading.working}
-          onRefresh={() =>
-            loadLocationDirectory('working', paths.working, undefined, selectedWorkingLocationId)
-          }
-          onBack={() => handleBackOneLevel('working')}
-          onRoot={() => handleGoToLocationRoot('working')}
-          onSelect={(entry) => handleSelectEntry('working', entry)}
-          onOpenFromEntry={(entry) => handleOpenEntry('working', entry)}
-          searchable
-        />
       </section>
 
       <section className="panel step-panel">
@@ -1158,6 +1108,56 @@ export default function BrowsePage() {
             </details>
           </section>
         ) : null}
+      </section>
+
+      <section className="grid two-col">
+        <BrowserPane
+          title="Storage Location"
+          currentPath={paths.storage}
+          rootPath={config.storageLocation.rootPath}
+          entries={entries.storage}
+          selectedItem={selected.storage}
+          loading={loading.storage}
+          onRefresh={() =>
+            loadLocationDirectory('storage', paths.storage, undefined, selectedWorkingLocationId)
+          }
+          onBack={() => handleBackOneLevel('storage')}
+          onRoot={() => handleGoToLocationRoot('storage')}
+          onSelect={(entry) => handleSelectEntry('storage', entry)}
+          onOpenFromEntry={(entry) => handleOpenEntry('storage', entry)}
+          searchable
+        />
+
+        <BrowserPane
+          title={
+            <select
+              className="pane-title-select"
+              value={selectedWorkingLocationId || ''}
+              onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
+              disabled={transferRunning}
+            >
+              {config.workingLocations.map((drive) => (
+                <option key={drive.id} value={drive.id}>
+                  {drive.name}
+                  {drive.isPrimary ? ' (Primary)' : ''}
+                </option>
+              ))}
+            </select>
+          }
+          currentPath={paths.working}
+          rootPath={currentWorkingLocation?.rootPath || '/mnt/media'}
+          entries={entries.working}
+          selectedItem={selected.working}
+          loading={loading.working}
+          onRefresh={() =>
+            loadLocationDirectory('working', paths.working, undefined, selectedWorkingLocationId)
+          }
+          onBack={() => handleBackOneLevel('working')}
+          onRoot={() => handleGoToLocationRoot('working')}
+          onSelect={(entry) => handleSelectEntry('working', entry)}
+          onOpenFromEntry={(entry) => handleOpenEntry('working', entry)}
+          searchable
+        />
       </section>
     </section>
   );

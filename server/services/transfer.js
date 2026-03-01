@@ -229,7 +229,7 @@ function buildPeerSshTarget(target) {
 }
 
 async function resolveWorkingPeerKeyForRsync(sourceTarget, destinationTarget) {
-  const candidateKeys = [peerRsyncKeyPath, '$HOME/.ssh/id_ed25519'];
+  const candidateKeys = [peerRsyncKeyPath];
 
   for (const keyPath of candidateKeys) {
     const testCommand = [

@@ -92,7 +92,13 @@ export const api = {
   },
   health: () => request('/health'),
   getConfig: () => request('/setup/config'),
-  saveConfig: (body) => request('/setup/config', { method: 'POST', body: JSON.stringify(body) }),
+  saveConfig: (body, configName) =>
+    request('/setup/config', { method: 'POST', body: JSON.stringify({ ...body, configName }) }),
+  listStoredConfigs: () => request('/setup/configs'),
+  loadStoredConfig: (name) =>
+    request('/setup/configs/load', { method: 'POST', body: JSON.stringify({ name }) }),
+  importConfig: (config, name) =>
+    request('/setup/configs/import', { method: 'POST', body: JSON.stringify({ config, name }) }),
   authorizeContainer: (body) =>
     request('/setup/authorize-container', { method: 'POST', body: JSON.stringify(body) }),
   enableStorageToWorking: (body) =>
@@ -101,9 +107,13 @@ export const api = {
     request('/setup/peer-trust/working-to-storage', { method: 'POST', body: JSON.stringify(body) }),
   testBootstrapConnection: (body) =>
     request('/setup/test-bootstrap', { method: 'POST', body: JSON.stringify(body) }),
+  testPeerConnection: (body) =>
+    request('/setup/test-peer', { method: 'POST', body: JSON.stringify(body) }),
   getSetupKeyStatus: () => request('/setup/key-status'),
   clearSetupConfig: (body) =>
     request('/setup/clear-config', { method: 'POST', body: JSON.stringify(body) }),
+  clearSetupConfigAndKeys: (body) =>
+    request('/setup/clear-config-and-keys', { method: 'POST', body: JSON.stringify(body) }),
   clearSetupContainerKnownHosts: (body) =>
     request('/setup/clear-container-known-hosts', { method: 'POST', body: JSON.stringify(body) }),
 

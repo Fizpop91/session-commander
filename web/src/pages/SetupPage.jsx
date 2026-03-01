@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowsClockwise, Eye, EyeClosed, Fingerprint, FloppyDiskBack, Info, PlusCircle, ShippingContainer, Trash } from '@phosphor-icons/react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CaretCircleLeft, DownloadSimple, Eye, EyeClosed, Fingerprint, FloppyDiskBack, FolderOpen, GearSix, Info, PlusCircle, SecurityCamera, ShippingContainer, Trash, UploadSimple, Users, XCircle } from '@phosphor-icons/react';
 import { api } from '../lib/api.js';
 
 const SETTINGS_TAB_KEYS = {
@@ -36,6 +36,10 @@ const defaultState = {
   workingLocations: [defaultWorkingLocation(1)],
   selectedWorkingLocationId: null
 };
+
+function hasConfiguredTarget(target) {
+  return Boolean(target?.host?.trim() && target?.username?.trim() && target?.rootPath?.trim());
+}
 
 function normalizeConfig(config) {
   const storageLocation = {
@@ -138,6 +142,12 @@ export default function SetupPage({
   const [keyStatus, setKeyStatus] = useState({
     hasContainerKey: false
   });
+  const [peerTrustStatus, setPeerTrustStatus] = useState({
+    checked: false,
+    loading: false,
+    storageToWorking: false,
+    workingToStorage: false
+  });
   const [connectionTest, setConnectionTest] = useState({
     storage: { loading: false, tone: 'pending', text: '' },
     working: { loading: false, tone: 'pending', text: '' }
@@ -178,17 +188,60 @@ export default function SetupPage({
   });
   const [firstUserNotice, setFirstUserNotice] = useState({ tone: 'pending', text: '' });
   const [clearConfigModalOpen, setClearConfigModalOpen] = useState(false);
+  const [clearKeysModal, setClearKeysModal] = useState({
+    open: false,
+    storagePassword: '',
+    workingPassword: '',
+    notice: { tone: 'pending', text: '' }
+  });
+  const [saveConfigModal, setSaveConfigModal] = useState({
+    open: false,
+    name: 'config'
+  });
   const [clearKnownHostsModal, setClearKnownHostsModal] = useState({
     open: false,
     host: '',
     label: '',
     side: 'storage'
   });
-  const [macInfoModalOpen, setMacInfoModalOpen] = useState(false);
+  const [loadConfigModal, setLoadConfigModal] = useState({
+    open: false,
+    mode: 'menu',
+    loading: false,
+    configs: []
+  });
   const [knownHostsNotice, setKnownHostsNotice] = useState({
     storage: { tone: 'pending', text: '' },
     working: { tone: 'pending', text: '' }
   });
+  const uploadConfigInputRef = useRef(null);
+
+  function resetSetupProgressUiState() {
+    setContainerAction({
+      state: 'pending',
+      loading: false,
+      message: '',
+      publicKey: '',
+      storage: null,
+      working: null
+    });
+    setStorageToWorkingAction({
+      state: 'pending',
+      loading: false,
+      message: '',
+      test: null
+    });
+    setWorkingToStorageAction({
+      state: 'pending',
+      loading: false,
+      message: '',
+      test: null
+    });
+    setConnectionTest({
+      storage: { loading: false, tone: 'pending', text: '' },
+      working: { loading: false, tone: 'pending', text: '' }
+    });
+  }
 
   const currentWorkingLocation = useMemo(
     () =>
@@ -424,16 +477,28 @@ export default function SetupPage({
     if (!bootstrap.workingPassword) throw new Error('working location bootstrap password is required');
   }
 
-  async function handleSave() {
+  function openSaveConfigModal() {
+    setSaveConfigModal({
+      open: true,
+      name: 'config'
+    });
+  }
+
+  async function handleSaveConfigFromModal() {
+    const configName = String(saveConfigModal.name || '').trim() || 'config';
     try {
       setSaving(true);
       setGlobalMessage('');
       setConfigNotice({ tone: 'pending', text: '' });
 
       const payload = normalizeConfig(form);
-      const result = await api.saveConfig(payload);
+      const result = await api.saveConfig(payload, configName);
       setForm(normalizeConfig(result.config));
-      setConfigNotice({ tone: 'success', text: 'Configuration saved.' });
+      setSaveConfigModal({ open: false, name: 'config' });
+      setConfigNotice({
+        tone: 'success',
+        text: result.storedAs ? `Configuration saved as ${result.storedAs}.` : 'Configuration saved.'
+      });
       notifySetupProgressChanged();
     } catch (error) {
       setConfigNotice({ tone: 'error', text: `Failed to save config: ${error.message}` });
@@ -442,43 +507,127 @@ export default function SetupPage({
     }
   }
 
-  async function handleRestoreConfig() {
+  async function refreshConfigFromServer(successText) {
+    const [config, setupKeyStatus] = await Promise.all([api.getConfig(), api.getSetupKeyStatus()]);
+    setForm(normalizeConfig(config));
+    setKeyStatus({
+      hasContainerKey: Boolean(setupKeyStatus?.hasContainerKey)
+    });
+    setBootstrap({
+      storagePassword: '',
+      workingPassword: ''
+    });
+    if (successText) {
+      setConfigNotice({ tone: 'success', text: successText });
+    }
+    notifySetupProgressChanged();
+  }
+
+  function openLoadConfigModal() {
+    setLoadConfigModal({
+      open: true,
+      mode: 'menu',
+      loading: false,
+      configs: []
+    });
+  }
+
+  async function showStoredConfigsInModal() {
     try {
-      setGlobalMessage('');
-      setConfigNotice({ tone: 'pending', text: '' });
-
-      const [config, setupKeyStatus] = await Promise.all([api.getConfig(), api.getSetupKeyStatus()]);
-      setForm(normalizeConfig(config));
-      setKeyStatus({
-        hasContainerKey: Boolean(setupKeyStatus?.hasContainerKey)
-      });
-      setBootstrap({
-        storagePassword: '',
-        workingPassword: ''
-      });
-
-      setConfigNotice({ tone: 'success', text: 'Saved configuration restored.' });
-      notifySetupProgressChanged();
+      setLoadConfigModal((current) => ({ ...current, mode: 'stored', loading: true }));
+      const payload = await api.listStoredConfigs();
+      setLoadConfigModal((current) => ({
+        ...current,
+        mode: 'stored',
+        loading: false,
+        configs: Array.isArray(payload.configs) ? payload.configs : []
+      }));
     } catch (error) {
-      setConfigNotice({ tone: 'error', text: `Failed to restore config: ${error.message}` });
+      setLoadConfigModal((current) => ({ ...current, loading: false }));
+      setConfigNotice({ tone: 'error', text: `Failed to list stored configs: ${error.message}` });
     }
   }
 
-  async function handleClearConfig(removeKeys) {
+  async function handleLoadStoredConfig(fileName) {
+    try {
+      setLoadConfigModal((current) => ({ ...current, loading: true }));
+      setConfigNotice({ tone: 'pending', text: '' });
+      await api.loadStoredConfig(fileName);
+      await refreshConfigFromServer(`Loaded config: ${fileName}`);
+      setLoadConfigModal({ open: false, mode: 'menu', loading: false, configs: [] });
+    } catch (error) {
+      setLoadConfigModal((current) => ({ ...current, loading: false }));
+      setConfigNotice({ tone: 'error', text: `Failed to load config: ${error.message}` });
+    }
+  }
+
+  async function handleUploadConfigFile(event) {
+    const file = event.target?.files?.[0];
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw);
+      setConfigNotice({ tone: 'pending', text: '' });
+      await api.importConfig(parsed, file.name);
+      await refreshConfigFromServer(`Uploaded and loaded config: ${file.name}`);
+      setLoadConfigModal({ open: false, mode: 'menu', loading: false, configs: [] });
+    } catch (error) {
+      setConfigNotice({ tone: 'error', text: `Upload config failed: ${error.message}` });
+    } finally {
+      if (event.target) {
+        event.target.value = '';
+      }
+    }
+  }
+
+  async function handleDownloadConfig() {
+    try {
+      setConfigNotice({ tone: 'pending', text: '' });
+      const config = await api.getConfig();
+      const fileName = 'session-commander-config.json';
+
+      const jsonText = JSON.stringify(config, null, 2);
+      if (window.showSaveFilePicker) {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [
+            {
+              description: 'JSON Config',
+              accept: { 'application/json': ['.json'] }
+            }
+          ]
+        });
+        const writable = await handle.createWritable();
+        await writable.write(jsonText);
+        await writable.close();
+      } else {
+        const blob = new Blob([jsonText], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      }
+      setConfigNotice({ tone: 'success', text: `Config downloaded: ${fileName}` });
+    } catch (error) {
+      if (String(error?.name || '') === 'AbortError') return;
+      setConfigNotice({ tone: 'error', text: `Download config failed: ${error.message}` });
+    }
+  }
+
+  async function handleClearConfig() {
     try {
       setSaving(true);
       setGlobalMessage('');
       setConfigNotice({ tone: 'pending', text: '' });
-      const result = await api.clearSetupConfig({ removeKeys });
-      setForm(normalizeConfig(result.config));
-      setKeyStatus({
-        hasContainerKey: removeKeys ? false : keyStatus.hasContainerKey
-      });
-      setBootstrap({
-        storagePassword: '',
-        workingPassword: ''
-      });
+      const result = await api.clearSetupConfig({});
+      await refreshConfigFromServer();
       setClearConfigModalOpen(false);
+      resetSetupProgressUiState();
 
       if (Array.isArray(result.warnings) && result.warnings.length) {
         setConfigNotice({
@@ -486,16 +635,141 @@ export default function SetupPage({
           text: `Configuration cleared with warnings: ${result.warnings.join(' | ')}`
         });
       } else {
-        setConfigNotice({
+      setConfigNotice({
           tone: 'success',
-          text: removeKeys
-            ? 'Configuration and SSH keys were cleared.'
-            : 'Configuration was cleared.'
+          text: 'Loaded default empty configuration.'
         });
       }
-      notifySetupProgressChanged();
+      setPeerTrustStatus({
+        checked: false,
+        loading: false,
+        storageToWorking: false,
+        workingToStorage: false
+      });
+      setClearKeysModal({
+        open: false,
+        storagePassword: '',
+        workingPassword: '',
+        notice: { tone: 'pending', text: '' }
+      });
     } catch (error) {
       setConfigNotice({ tone: 'error', text: `Clear config failed: ${error.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openClearConfigAndKeysModal() {
+    setClearKeysModal({
+      open: true,
+      storagePassword: '',
+      workingPassword: '',
+      notice: { tone: 'pending', text: '' }
+    });
+  }
+
+  async function handleClearConfigAndKeys() {
+    try {
+      if (!form.storageLocation.host?.trim() || !form.storageLocation.username?.trim()) {
+        throw new Error('Storage location host and username are required');
+      }
+      if (!currentWorkingLocation?.host?.trim() || !currentWorkingLocation?.username?.trim()) {
+        throw new Error('Working location host and username are required');
+      }
+      if (!clearKeysModal.storagePassword) {
+        throw new Error('Storage location password is required');
+      }
+      if (!clearKeysModal.workingPassword) {
+        throw new Error('Working location password is required');
+      }
+
+      setSaving(true);
+      setClearKeysModal((current) => ({
+        ...current,
+        notice: { tone: 'pending', text: '' }
+      }));
+      setConfigNotice({ tone: 'pending', text: '' });
+
+      const payload = {
+        storageTarget: {
+          host: form.storageLocation.host,
+          port: Number(form.storageLocation.port) || 22,
+          username: form.storageLocation.username
+        },
+        storagePassword: clearKeysModal.storagePassword,
+        workingTarget: {
+          host: currentWorkingLocation.host,
+          port: Number(currentWorkingLocation.port) || 22,
+          username: currentWorkingLocation.username
+        },
+        workingPassword: clearKeysModal.workingPassword
+      };
+
+      const result = await api.clearSetupConfigAndKeys(payload);
+      await refreshConfigFromServer();
+      setClearKeysModal({
+        open: false,
+        storagePassword: '',
+        workingPassword: '',
+        notice: { tone: 'pending', text: '' }
+      });
+      setPeerTrustStatus({
+        checked: true,
+        loading: false,
+        storageToWorking: false,
+        workingToStorage: false
+      });
+      setClearConfigModalOpen(false);
+      resetSetupProgressUiState();
+
+      const reportParts = [];
+      if (result?.keyReport?.container) {
+        const containerReport = result.keyReport.container;
+        reportParts.push(
+          `Container keys: before=${
+            containerReport.before?.privateKey || containerReport.before?.publicKey ? 'present' : 'none'
+          }, after=${
+            containerReport.after?.privateKey || containerReport.after?.publicKey ? 'present' : 'none'
+          }`
+        );
+      }
+      if (result?.keyReport?.storage) {
+        reportParts.push(
+          `Storage peer keys: before=${result.keyReport.storage.before?.hasAny ? 'present' : 'none'}, after=${
+            result.keyReport.storage.after?.hasAny ? 'present' : 'none'
+          }`
+        );
+      }
+      if (result?.keyReport?.working) {
+        reportParts.push(
+          `Working peer keys: before=${result.keyReport.working.before?.hasAny ? 'present' : 'none'}, after=${
+            result.keyReport.working.after?.hasAny ? 'present' : 'none'
+          }`
+        );
+      }
+      const reportText = reportParts.length ? ` Report: ${reportParts.join(' | ')}` : '';
+
+      if (Array.isArray(result.warnings) && result.warnings.length) {
+        setConfigNotice({
+          tone: 'pending',
+          text: `Configuration loaded and key cleanup completed with warnings: ${result.warnings.join(' | ')}.${reportText}`
+        });
+      } else if (!result.keysFound) {
+        setConfigNotice({
+          tone: 'success',
+          text: `Loaded default empty configuration. No SSH keys were found to remove.${reportText}`
+        });
+      } else {
+        setConfigNotice({
+          tone: 'success',
+          text: `Loaded default empty configuration and removed SSH keys from configured systems.${reportText}`
+        });
+      }
+    } catch (error) {
+      setClearKeysModal((current) => ({
+        ...current,
+        notice: { tone: 'error', text: error.message }
+      }));
     } finally {
       setSaving(false);
     }
@@ -622,9 +896,17 @@ export default function SetupPage({
       setKeyStatus({
         hasContainerKey: true
       });
+      setPeerTrustStatus({
+        checked: true,
+        loading: false,
+        storageToWorking: false,
+        workingToStorage: false
+      });
 
       await persistCurrentWorkingLocationSetupState({
-        containerAuthorized: true
+        containerAuthorized: true,
+        storageToWorking: false,
+        workingToStorage: false
       });
     } catch (error) {
       const raw = String(error.message || '');
@@ -674,6 +956,11 @@ export default function SetupPage({
         message: `Storage location can now connect directly to ${currentWorkingLocation.name}.`,
         test: result.test || null
       });
+      setPeerTrustStatus((current) => ({
+        ...current,
+        checked: true,
+        storageToWorking: true
+      }));
 
       await persistCurrentWorkingLocationSetupState({
         storageToWorking: true
@@ -722,6 +1009,11 @@ export default function SetupPage({
         message: `${currentWorkingLocation.name} can now connect directly to storage location.`,
         test: result.test || null
       });
+      setPeerTrustStatus((current) => ({
+        ...current,
+        checked: true,
+        workingToStorage: true
+      }));
 
       await persistCurrentWorkingLocationSetupState({
         workingToStorage: true
@@ -961,6 +1253,128 @@ export default function SetupPage({
         workingToStorage: false
       };
 
+  function getPeerTargetsForCheck() {
+    if (!keyStatus.hasContainerKey) return null;
+    const storageHost = String(form.storageLocation.host || '').trim();
+    const storageUser = String(form.storageLocation.username || '').trim();
+    const workingHost = String(currentWorkingLocation?.host || '').trim();
+    const workingUser = String(currentWorkingLocation?.username || '').trim();
+
+    if (!storageHost || !storageUser || !workingHost || !workingUser) return null;
+
+    return {
+      storageTarget: {
+        host: storageHost,
+        port: Number(form.storageLocation.port) || 22,
+        username: storageUser
+      },
+      workingTarget: {
+        host: workingHost,
+        port: Number(currentWorkingLocation?.port) || 22,
+        username: workingUser
+      }
+    };
+  }
+
+  async function refreshPeerTrustStatus({ persist = false } = {}) {
+    const targets = getPeerTargetsForCheck();
+    if (!targets) {
+      setPeerTrustStatus({
+        checked: true,
+        loading: false,
+        storageToWorking: false,
+        workingToStorage: false
+      });
+      return {
+        storageToWorking: false,
+        workingToStorage: false
+      };
+    }
+
+    setPeerTrustStatus((current) => ({ ...current, loading: true }));
+
+    const [storageToWorkingProbe, workingToStorageProbe] = await Promise.allSettled([
+      api.testPeerConnection({
+        sourceTarget: targets.storageTarget,
+        destinationTarget: targets.workingTarget
+      }),
+      api.testPeerConnection({
+        sourceTarget: targets.workingTarget,
+        destinationTarget: targets.storageTarget
+      })
+    ]);
+
+    const next = {
+      storageToWorking: storageToWorkingProbe.status === 'fulfilled',
+      workingToStorage: workingToStorageProbe.status === 'fulfilled'
+    };
+
+    setPeerTrustStatus({
+      checked: true,
+      loading: false,
+      ...next
+    });
+
+    if (
+      persist &&
+      currentWorkingLocation &&
+      (selectedSetupState.storageToWorking !== next.storageToWorking ||
+        selectedSetupState.workingToStorage !== next.workingToStorage)
+    ) {
+      await persistCurrentWorkingLocationSetupState({
+        storageToWorking: next.storageToWorking,
+        workingToStorage: next.workingToStorage
+      });
+    }
+
+    return next;
+  }
+
+  useEffect(() => {
+    let active = true;
+
+    async function probeTrust() {
+      try {
+        const targets = getPeerTargetsForCheck();
+        if (!targets) {
+          if (!active) return;
+          setPeerTrustStatus({
+            checked: true,
+            loading: false,
+            storageToWorking: false,
+            workingToStorage: false
+          });
+          return;
+        }
+        await refreshPeerTrustStatus({ persist: true });
+      } catch {
+        if (!active) return;
+        setPeerTrustStatus((current) => ({ ...current, loading: false, checked: true }));
+      }
+    }
+
+    probeTrust();
+    return () => {
+      active = false;
+    };
+  }, [
+    keyStatus.hasContainerKey,
+    currentWorkingLocation?.id,
+    currentWorkingLocation?.host,
+    currentWorkingLocation?.port,
+    currentWorkingLocation?.username,
+    form.storageLocation.host,
+    form.storageLocation.port,
+    form.storageLocation.username
+  ]);
+
+  const resolvedStorageToWorkingTrust = peerTrustStatus.checked
+    ? peerTrustStatus.storageToWorking
+    : effectiveSetupState.storageToWorking;
+  const resolvedWorkingToStorageTrust = peerTrustStatus.checked
+    ? peerTrustStatus.workingToStorage
+    : effectiveSetupState.workingToStorage;
+
   const containerDisplayState =
     containerAction.state === 'error'
       ? 'error'
@@ -971,26 +1385,36 @@ export default function SetupPage({
   const storageToWorkingDisplayState =
     storageToWorkingAction.state === 'error'
       ? 'error'
-      : storageToWorkingAction.state === 'done' || effectiveSetupState.storageToWorking
+      : storageToWorkingAction.state === 'done' || resolvedStorageToWorkingTrust
         ? 'done'
         : 'pending';
 
   const workingToStorageDisplayState =
     workingToStorageAction.state === 'error'
       ? 'error'
-      : workingToStorageAction.state === 'done' || effectiveSetupState.workingToStorage
+      : workingToStorageAction.state === 'done' || resolvedWorkingToStorageTrust
         ? 'done'
         : 'pending';
 
+  const targetsConfigured =
+    hasConfiguredTarget(form.storageLocation) &&
+    Boolean(form.storageLocation.templateDirectoryPath?.trim()) &&
+    hasConfiguredTarget(currentWorkingLocation);
+
+  const trustStepReady =
+    storageToWorkingDisplayState === 'done' && workingToStorageDisplayState === 'done';
+
   const summary = useMemo(() => {
     const readyCount = [
+      targetsConfigured,
       containerDisplayState === 'done',
-      storageToWorkingDisplayState === 'done',
-      workingToStorageDisplayState === 'done'
+      trustStepReady
     ].filter(Boolean).length;
 
     return `${readyCount}/3 setup steps completed`;
-  }, [containerDisplayState, storageToWorkingDisplayState, workingToStorageDisplayState]);
+  }, [targetsConfigured, containerDisplayState, trustStepReady]);
+
+  const allSetupStepsComplete = targetsConfigured && containerDisplayState === 'done' && trustStepReady;
 
   if (loading) {
     return (
@@ -1033,39 +1457,51 @@ export default function SetupPage({
             className={activeTab === SETTINGS_TAB_KEYS.setup ? 'nav-button active' : 'nav-button'}
             onClick={() => setActiveTab(SETTINGS_TAB_KEYS.setup)}
           >
+            <GearSix size={18} weight="duotone" aria-hidden="true" />
             Configuration
           </button>
           <button
             className={activeTab === SETTINGS_TAB_KEYS.security ? 'nav-button active' : 'nav-button'}
             onClick={() => setActiveTab(SETTINGS_TAB_KEYS.security)}
           >
+            <SecurityCamera size={18} weight="duotone" aria-hidden="true" />
             Security
           </button>
           <button
             className={activeTab === SETTINGS_TAB_KEYS.users ? 'nav-button active' : 'nav-button'}
             onClick={() => setActiveTab(SETTINGS_TAB_KEYS.users)}
           >
+            <Users size={18} weight="duotone" aria-hidden="true" />
             Users
           </button>
         </section>
       ) : null}
       {globalMessage ? <p>{globalMessage}</p> : null}
+      <input
+        ref={uploadConfigInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: 'none' }}
+        onChange={handleUploadConfigFile}
+      />
 
       {activeTab === SETTINGS_TAB_KEYS.setup ? (
         <>
       <section className="panel step-panel">
         <div className="panel-header">
-          <h2>{wizardMode ? 'Setup Wizard' : 'Configuration'}</h2>
+          <h2 className="section-title-with-icon">
+            {!wizardMode ? <GearSix size={22} weight="duotone" aria-hidden="true" /> : null}
+            {wizardMode ? 'Setup Wizard' : 'Configuration'}
+          </h2>
           <StatusPill
-            tone={summary === '3/3 setup steps completed' ? 'success' : 'pending'}
+            tone={allSetupStepsComplete ? 'success' : 'pending'}
             label={summary}
           />
         </div>
+        <p className="setup-intro-lead setup-intro-lead-full">
+          Configure your locations below. You can configure multiple working locations.
+        </p>
         <div className="setup-intro">
-          <p className="setup-intro-lead">
-            Run the setup wizard first before using the tool.
-            Configure the storage and working location. You can add multiple working locations.
-          </p>
           <div className="setup-intro-item">
             <span className="setup-label-tag">Storage Location</span>
             <p>Your server or NAS where you store your backed up sessions.</p>
@@ -1073,10 +1509,16 @@ export default function SetupPage({
           <div className="setup-intro-item">
             <span className="setup-label-tag">Working Location</span>
             <p className="setup-working-line">
-              The system where you run your sessions off of. This can also be a server or NAS, or
-              even a drive/location local to your working machine.
+              The location where you run your sessions from. This can be a network share or a
+              folder on your local machine.
             </p>
           </div>
+        </div>
+        <div className="result-banner pending setup-mac-note">
+          For Mac&apos;s, make sure SSH is enabled in System Settings -> General -> Sharing ->
+          Remote Login, as well as Wake for Network Access in General -> Battery/Energy -> Options.
+          To get the path of a folder, right click the folder while holding option, then select
+          "copy foldername as pathname".
         </div>
       </section>
 
@@ -1088,20 +1530,22 @@ export default function SetupPage({
           </div>
           <div className="button-row">
             <button
-              className="setup-icon-button setup-icon-button-neutral setup-mac-info-button"
-              onClick={() => setMacInfoModalOpen(true)}
-              title="Info For Macs"
+              className="setup-icon-button setup-icon-button-neutral"
+              onClick={openLoadConfigModal}
+              disabled={saving}
+              title="Load Config"
+              aria-label="Load Config"
             >
-              Info For Macs
+              <UploadSimple size={18} weight="duotone" aria-hidden="true" />
             </button>
             <button
-              className="setup-icon-button setup-icon-button-neutral setup-icon-refresh"
-              onClick={handleRestoreConfig}
+              className="setup-icon-button setup-icon-button-neutral"
+              onClick={handleDownloadConfig}
               disabled={saving}
-              title="Restore Config"
-              aria-label="Restore Config"
+              title="Download Config"
+              aria-label="Download Config"
             >
-              <IconRefresh />
+              <DownloadSimple size={18} weight="duotone" aria-hidden="true" />
             </button>
             <button
               className="setup-icon-button setup-icon-button-danger"
@@ -1114,7 +1558,7 @@ export default function SetupPage({
             </button>
             <button
               className="setup-icon-button"
-              onClick={handleSave}
+              onClick={openSaveConfigModal}
               disabled={saving}
               title="Save Config"
               aria-label="Save Config"
@@ -1336,9 +1780,13 @@ export default function SetupPage({
 
       <section className="panel step-panel">
         <div className="panel-header">
-          <div>
+          <div className="authorize-header-content">
             <h3>2. Authorize Container Access</h3>
             <p>Authorize the container against the storage location and the selected working location.</p>
+            <div className="setup-info-label">
+              These passwords are not saved anywhere, they are only used for the authorization process
+              and automatically clear when setup is done.
+            </div>
           </div>
           <div className="action-stack">
             <StatusPill
@@ -1346,46 +1794,54 @@ export default function SetupPage({
               label={containerDisplayState === 'done' ? 'Ready' : containerDisplayState === 'error' ? 'Issue' : 'Pending'}
             />
             <button
-              className="button-primary"
+              className="button-primary authorize-button"
               onClick={handleAuthorizeContainer}
               disabled={containerAction.loading || !currentWorkingLocation}
             >
-              {containerAction.loading ? 'Working…' : 'Authorize Container'}
+              {containerAction.loading ? 'Working…' : 'Authorize'}
             </button>
           </div>
         </div>
 
-        <section className="grid two-col">
+        <section className="grid two-col authorize-password-grid">
           <label>
-            Storage Location Bootstrap Password
-            <PasswordField
-              value={bootstrap.storagePassword}
-              onChange={(e) => updateBootstrap('storagePassword', e.target.value)}
-            />
+            Storage Location {form.storageLocation.username ? `${form.storageLocation.username} ` : ''}Password
+            <div className="authorize-password-row">
+              <div className="authorize-password-field">
+                <PasswordField
+                  value={bootstrap.storagePassword}
+                  onChange={(e) => updateBootstrap('storagePassword', e.target.value)}
+                />
+              </div>
+              <button
+                className="authorize-test-button"
+                onClick={() => handleTestBootstrapConnection('storage')}
+                disabled={connectionTest.storage.loading}
+              >
+                {connectionTest.storage.loading ? 'Testing…' : 'Test Connection'}
+              </button>
+            </div>
           </label>
 
           <label>
-            {currentWorkingLocation?.name || 'Working Location'} Bootstrap Password
-            <PasswordField
-              value={bootstrap.workingPassword}
-              onChange={(e) => updateBootstrap('workingPassword', e.target.value)}
-            />
+            {(currentWorkingLocation?.name || 'Working Location')} {currentWorkingLocation?.username ? `${currentWorkingLocation.username} ` : ''}Password
+            <div className="authorize-password-row">
+              <div className="authorize-password-field">
+                <PasswordField
+                  value={bootstrap.workingPassword}
+                  onChange={(e) => updateBootstrap('workingPassword', e.target.value)}
+                />
+              </div>
+              <button
+                className="authorize-test-button"
+                onClick={() => handleTestBootstrapConnection('working')}
+                disabled={connectionTest.working.loading}
+              >
+                {connectionTest.working.loading ? 'Testing…' : 'Test Connection'}
+              </button>
+            </div>
           </label>
         </section>
-        <div className="button-row" style={{ marginTop: 12 }}>
-          <button
-            onClick={() => handleTestBootstrapConnection('storage')}
-            disabled={connectionTest.storage.loading}
-          >
-            {connectionTest.storage.loading ? 'Testing…' : 'Test Connection'}
-          </button>
-          <button
-            onClick={() => handleTestBootstrapConnection('working')}
-            disabled={connectionTest.working.loading}
-          >
-            {connectionTest.working.loading ? 'Testing…' : 'Test Connection'}
-          </button>
-        </div>
 
         {connectionTest.storage.text ? (
           <ResultBanner tone={connectionTest.storage.tone} text={connectionTest.storage.text} />
@@ -1410,13 +1866,13 @@ export default function SetupPage({
         <div className="panel-header">
           <div>
             <h3>3. Enable Direct Location-to-Location Trust</h3>
-            <p>The selected working location only needs trust with storage location, not with other working locations.</p>
+            <p>The selected working location only needs trust with the storage location, not with other working locations.</p>
           </div>
         </div>
 
         <section className="grid two-col">
           <section className="subpanel">
-            <div className="panel-header">
+            <div className="panel-header trust-panel-header">
               <div>
                 <h4>Storage Location → {currentWorkingLocation?.name || 'Working Location'}</h4>
                 <p>Allows restoring from storage to working location.</p>
@@ -1427,23 +1883,25 @@ export default function SetupPage({
               />
             </div>
 
-            <button
-              className="button-primary"
-              onClick={handleEnableStorageToWorking}
-              disabled={storageToWorkingAction.loading || !currentWorkingLocation}
-            >
-              {storageToWorkingAction.loading ? 'Working…' : 'Enable'}
-            </button>
-
             {storageToWorkingAction.message ? (
               <ResultBanner tone={statusTone(storageToWorkingAction.state)} text={storageToWorkingAction.message} />
-            ) : effectiveSetupState.storageToWorking ? (
+            ) : resolvedStorageToWorkingTrust ? (
               <ResultBanner tone="success" text="Storage location trust was previously configured for this working location." />
             ) : null}
+
+            <div className="trust-enable-row">
+              <button
+                className="button-primary"
+                onClick={handleEnableStorageToWorking}
+                disabled={storageToWorkingAction.loading || !currentWorkingLocation}
+              >
+                {storageToWorkingAction.loading ? 'Working…' : 'Enable'}
+              </button>
+            </div>
           </section>
 
           <section className="subpanel">
-            <div className="panel-header">
+            <div className="panel-header trust-panel-header">
               <div>
                 <h4>{currentWorkingLocation?.name || 'Working Location'} → Storage Location</h4>
                 <p>Allows backup from working location to storage.</p>
@@ -1454,19 +1912,21 @@ export default function SetupPage({
               />
             </div>
 
-            <button
-              className="button-primary"
-              onClick={handleEnableWorkingToStorage}
-              disabled={workingToStorageAction.loading || !currentWorkingLocation}
-            >
-              {workingToStorageAction.loading ? 'Working…' : 'Enable'}
-            </button>
-
             {workingToStorageAction.message ? (
               <ResultBanner tone={statusTone(workingToStorageAction.state)} text={workingToStorageAction.message} />
-            ) : effectiveSetupState.workingToStorage ? (
+            ) : resolvedWorkingToStorageTrust ? (
               <ResultBanner tone="success" text="Working location trust was previously configured for this working location." />
             ) : null}
+
+            <div className="trust-enable-row">
+              <button
+                className="button-primary"
+                onClick={handleEnableWorkingToStorage}
+                disabled={workingToStorageAction.loading || !currentWorkingLocation}
+              >
+                {workingToStorageAction.loading ? 'Working…' : 'Enable'}
+              </button>
+            </div>
           </section>
         </section>
       </section>
@@ -1501,12 +1961,12 @@ export default function SetupPage({
               </button>
               <button
                 onClick={() => onWizardContinue?.()}
-                disabled={summary !== '3/3 setup steps completed'}
+                disabled={!allSetupStepsComplete}
               >
                 {authState.authEnabled ? 'Continue' : 'Continue Without Auth'}
               </button>
             </div>
-            {summary !== '3/3 setup steps completed' ? (
+            {!allSetupStepsComplete ? (
               <div className="result-banner pending" style={{ marginTop: 10 }}>
                 Complete all 3 setup steps before continuing.
               </div>
@@ -1520,12 +1980,16 @@ export default function SetupPage({
       {activeTab === SETTINGS_TAB_KEYS.security ? (
         !wizardMode ? (
         <section className="panel step-panel">
-          <div className="panel-header">
+          <div className="panel-header security-panel-header">
             <div>
-              <h3>Security</h3>
+              <h2 className="section-title-with-icon">
+                <SecurityCamera size={22} weight="duotone" aria-hidden="true" />
+                Security
+              </h2>
               <p>Keep authentication disabled for open access, or enable it to require sign in.</p>
             </div>
             <StatusPill
+              className="security-header-pill"
               tone={authState.authEnabled ? 'success' : 'pending'}
               label={authState.authEnabled ? 'Auth Enabled' : 'Auth Disabled'}
             />
@@ -1568,13 +2032,16 @@ export default function SetupPage({
       {activeTab === SETTINGS_TAB_KEYS.users ? (
         !wizardMode ? (
         <section className="panel step-panel">
-          <div className="panel-header">
+          <div className="panel-header users-panel-header">
             <div>
-              <h3>Users</h3>
+              <h2 className="section-title-with-icon">
+                <Users size={22} weight="duotone" aria-hidden="true" />
+                Users
+              </h2>
               <p>Manage users that can sign in when authentication is enabled.</p>
             </div>
             <button
-              className="button-primary"
+              className="button-primary users-header-add"
               onClick={() => {
                 setAddUserNotice({ tone: 'pending', text: '' });
                 setAddUserModalOpen(true);
@@ -1636,17 +2103,15 @@ export default function SetupPage({
             setAddUserNotice({ tone: 'pending', text: '' });
           }}
         >
-          <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
+          <section className="scheme-modal add-user-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Add User</h4>
-              <button
+              <ModalCloseButton
                 onClick={() => {
                   setAddUserModalOpen(false);
                   setAddUserNotice({ tone: 'pending', text: '' });
                 }}
-              >
-                Close
-              </button>
+              />
             </div>
             <section className="grid three-col">
               <label>
@@ -1668,42 +2133,64 @@ export default function SetupPage({
                 </select>
               </label>
             </section>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                Password
+            <section className="add-user-password-line" style={{ marginTop: 12 }}>
+              <div className="add-user-password-field">
+                <span className="add-user-password-label">Password</span>
                 <PasswordField
                   value={userDraft.password}
                   onChange={(e) => updateUserDraft('password', e.target.value)}
                 />
-              </label>
+              </div>
+              <div className="add-user-inline-status">
+                <span className="add-user-status-label-spacer" aria-hidden="true">Password</span>
+                <ResultBanner
+                  tone={
+                    !userDraft.password
+                      ? 'pending'
+                      : userDraft.password.length >= 8
+                        ? 'success'
+                        : 'error'
+                  }
+                  text={
+                    !userDraft.password
+                      ? 'Password must be at least 8 characters.'
+                      : userDraft.password.length >= 8
+                      ? 'Password length is valid.'
+                      : 'Password must be at least 8 characters.'
+                  }
+                />
+              </div>
             </section>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                Confirm Password
+            <section className="add-user-password-line" style={{ marginTop: 12 }}>
+              <div className="add-user-password-field">
+                <span className="add-user-password-label">Confirm Password</span>
                 <PasswordField
                   value={userDraft.confirmPassword}
                   onChange={(e) => updateUserDraft('confirmPassword', e.target.value)}
                 />
-              </label>
+              </div>
+              <div className="add-user-inline-status">
+                <span className="add-user-status-label-spacer" aria-hidden="true">Confirm Password</span>
+                <ResultBanner
+                  tone={
+                    !userDraft.password && !userDraft.confirmPassword
+                      ? 'pending'
+                      : userDraft.password && userDraft.confirmPassword && userDraft.password === userDraft.confirmPassword
+                      ? 'success'
+                      : 'error'
+                  }
+                  text={
+                    !userDraft.password && !userDraft.confirmPassword
+                      ? 'Passwords must match.'
+                      : userDraft.password && userDraft.confirmPassword && userDraft.password === userDraft.confirmPassword
+                      ? 'Passwords match.'
+                      : 'Passwords do not match.'
+                  }
+                />
+              </div>
             </section>
-            {userDraft.password ? (
-              <ResultBanner
-                tone={userDraft.password.length >= 8 ? 'success' : 'error'}
-                text={
-                  userDraft.password.length >= 8
-                    ? 'Password length is valid.'
-                    : 'Password must be at least 8 characters.'
-                }
-              />
-            ) : null}
-            {userDraft.password || userDraft.confirmPassword ? (
-              <ResultBanner
-                tone={userDraft.password === userDraft.confirmPassword ? 'success' : 'error'}
-                text={userDraft.password === userDraft.confirmPassword ? 'Passwords match.' : 'Passwords do not match.'}
-              />
-            ) : null}
             {addUserNotice.text ? <ResultBanner tone={addUserNotice.tone} text={addUserNotice.text} /> : null}
-            <div className="button-row" style={{ marginTop: 12 }}>
+            <div className="button-row add-user-actions">
               <button className="button-primary" onClick={handleAddUser} disabled={usersLoading}>
                 {usersLoading ? 'Working…' : 'Add User'}
               </button>
@@ -1728,7 +2215,7 @@ export default function SetupPage({
           <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Change Password</h4>
-              <button
+              <ModalCloseButton
                 onClick={() => {
                   setChangePasswordModal({
                     open: false,
@@ -1738,9 +2225,7 @@ export default function SetupPage({
                   });
                   setChangePasswordNotice({ tone: 'pending', text: '' });
                 }}
-              >
-                Close
-              </button>
+              />
             </div>
             <p>
               User: <strong>{changePasswordModal.username}</strong>
@@ -1820,14 +2305,12 @@ export default function SetupPage({
           <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Create Admin User</h4>
-              <button
+              <ModalCloseButton
                 onClick={() => {
                   setFirstUserModalOpen(false);
                   setFirstUserNotice({ tone: 'pending', text: '' });
                 }}
-              >
-                Close
-              </button>
+              />
             </div>
             <p>
               Authentication requires at least one admin user.
@@ -1902,20 +2385,189 @@ export default function SetupPage({
         </div>
       ) : null}
 
+      {loadConfigModal.open ? (
+        <div
+          className="scheme-modal-backdrop"
+          onClick={() => setLoadConfigModal({ open: false, mode: 'menu', loading: false, configs: [] })}
+        >
+          <section
+            className={`scheme-modal load-config-modal${loadConfigModal.mode === 'menu' ? ' load-config-modal-menu' : ''}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="panel-header">
+              <h4>Load Config</h4>
+              <div className="modal-header-actions">
+                {loadConfigModal.mode === 'stored' ? (
+                  <button
+                    className="setup-icon-button setup-icon-button-neutral"
+                    onClick={() => setLoadConfigModal((current) => ({ ...current, mode: 'menu' }))}
+                    title="Back"
+                    aria-label="Back"
+                  >
+                    <CaretCircleLeft size={20} weight="duotone" aria-hidden="true" />
+                  </button>
+                ) : null}
+                <ModalCloseButton onClick={() => setLoadConfigModal({ open: false, mode: 'menu', loading: false, configs: [] })} />
+              </div>
+            </div>
+
+            {loadConfigModal.mode === 'menu' ? (
+              <div className="button-row load-config-menu-actions">
+                <button
+                  className="setup-icon-button setup-icon-button-neutral setup-config-action-button"
+                  onClick={() => uploadConfigInputRef.current?.click()}
+                >
+                  <UploadSimple size={18} weight="duotone" aria-hidden="true" />
+                  <span>Upload Config</span>
+                </button>
+                <button
+                  className="setup-icon-button setup-icon-button-neutral setup-config-action-button"
+                  onClick={showStoredConfigsInModal}
+                  disabled={loadConfigModal.loading}
+                >
+                  <FolderOpen size={18} weight="duotone" aria-hidden="true" />
+                  <span>{loadConfigModal.loading ? 'Loading…' : 'Load Stored Config'}</span>
+                </button>
+              </div>
+            ) : (
+              <>
+                {loadConfigModal.loading ? <p style={{ marginTop: 10 }}>Loading configs…</p> : null}
+                {!loadConfigModal.loading && !loadConfigModal.configs.length ? (
+                  <p style={{ marginTop: 10 }}>No stored configs found</p>
+                ) : null}
+                {!loadConfigModal.loading && loadConfigModal.configs.length ? (
+                  <ul className="entry-list" style={{ marginTop: 10 }}>
+                    {loadConfigModal.configs.map((item) => (
+                      <li key={item.name}>
+                        <div className="user-row">
+                          <div>
+                            <strong>{item.name}</strong>
+                            <p className="muted-line">
+                              Modified: {item.modifiedAt ? new Date(item.modifiedAt).toLocaleString() : '—'}
+                            </p>
+                          </div>
+                          <button
+                            className="button-primary"
+                            onClick={() => handleLoadStoredConfig(item.name)}
+                            disabled={loadConfigModal.loading}
+                          >
+                            Load
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </>
+            )}
+          </section>
+        </div>
+      ) : null}
+
       {clearConfigModalOpen ? (
         <div className="scheme-modal-backdrop" onClick={() => setClearConfigModalOpen(false)}>
           <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Clear Configuration</h4>
-              <button onClick={() => setClearConfigModalOpen(false)}>Close</button>
+              <ModalCloseButton onClick={() => setClearConfigModalOpen(false)} />
             </div>
-            <p>Choose how you want to reset setup.</p>
-            <div className="button-row" style={{ marginTop: 12 }}>
-              <button onClick={() => handleClearConfig(false)} disabled={saving}>
-                Clear Config Only
+            <p>Load the default empty configuration? Locally stored config files will be kept.</p>
+            <div className="button-row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+              <button className="clear-with-keys-button" onClick={openClearConfigAndKeysModal} disabled={saving}>
+                {saving ? 'Working…' : 'Load Default + Clear SSH Keys'}
               </button>
-              <button className="button-primary" onClick={() => handleClearConfig(true)} disabled={saving}>
-                Clear Config + Remove SSH Keys
+              <button className="button-primary" onClick={() => handleClearConfig()} disabled={saving}>
+                {saving ? 'Clearing…' : 'Load Default'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {saveConfigModal.open ? (
+        <div
+          className="scheme-modal-backdrop"
+          onClick={() => setSaveConfigModal({ open: false, name: 'config' })}
+        >
+          <section className="scheme-modal save-config-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h4>Save Config</h4>
+              <ModalCloseButton onClick={() => setSaveConfigModal({ open: false, name: 'config' })} />
+            </div>
+            <p className="muted-line save-config-note">Saved configs do not include SSH keys.</p>
+            <div className="save-config-row">
+              <label className="save-config-name-label">
+              Config Name
+              <input
+                type="text"
+                value={saveConfigModal.name}
+                onChange={(e) =>
+                  setSaveConfigModal((current) => ({ ...current, name: e.target.value }))
+                }
+                placeholder="config"
+              />
+              </label>
+              <button className="button-primary" onClick={handleSaveConfigFromModal} disabled={saving}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {clearKeysModal.open ? (
+        <div
+          className="scheme-modal-backdrop"
+          onClick={() =>
+            setClearKeysModal({
+              open: false,
+              storagePassword: '',
+              workingPassword: '',
+              notice: { tone: 'pending', text: '' }
+            })
+          }
+        >
+          <section className="scheme-modal save-config-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h4>Clear SSH Keys</h4>
+              <ModalCloseButton
+                onClick={() =>
+                  setClearKeysModal({
+                    open: false,
+                    storagePassword: '',
+                    workingPassword: '',
+                    notice: { tone: 'pending', text: '' }
+                  })
+                }
+              />
+            </div>
+            <p className="clear-keys-description">
+              Enter passwords to verify and remove SSH keys from storage, working location, and container.
+            </p>
+            <label style={{ marginTop: 12 }}>
+              Storage Location {form.storageLocation.username ? `${form.storageLocation.username} ` : ''}Password
+              <PasswordField
+                value={clearKeysModal.storagePassword}
+                onChange={(e) =>
+                  setClearKeysModal((current) => ({ ...current, storagePassword: e.target.value }))
+                }
+              />
+            </label>
+            <label style={{ marginTop: 12 }}>
+              {(currentWorkingLocation?.name || 'Working Location')} {currentWorkingLocation?.username ? `${currentWorkingLocation.username} ` : ''}Password
+              <PasswordField
+                value={clearKeysModal.workingPassword}
+                onChange={(e) =>
+                  setClearKeysModal((current) => ({ ...current, workingPassword: e.target.value }))
+                }
+              />
+            </label>
+            {clearKeysModal.notice.text ? (
+              <ResultBanner tone={clearKeysModal.notice.tone} text={clearKeysModal.notice.text} />
+            ) : null}
+            <div className="button-row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+              <button className="button-primary" onClick={handleClearConfigAndKeys} disabled={saving}>
+                {saving ? 'Working…' : 'Clear Keys + Load Default'}
               </button>
             </div>
           </section>
@@ -1957,28 +2609,12 @@ export default function SetupPage({
           </section>
         </div>
       ) : null}
-
-      {macInfoModalOpen ? (
-        <div className="scheme-modal-backdrop" onClick={() => setMacInfoModalOpen(false)}>
-          <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-header">
-              <h4>Info For Macs</h4>
-              <button onClick={() => setMacInfoModalOpen(false)}>Close</button>
-            </div>
-            <p style={{ marginTop: 14 }}>For Macs, make sure SSH is enabled in System Settings -> General -> Sharing -> Remote Login.</p>
-            <p style={{ marginTop: 10 }}>
-              To get the path of a folder, right click the folder while holding option, then select
-              &nbsp;&apos;copy foldername as pathname&apos;.
-            </p>
-          </section>
-        </div>
-      ) : null}
     </section>
   );
 }
 
-function StatusPill({ tone, label }) {
-  return <span className={`status-pill ${tone}`}>{label}</span>;
+function StatusPill({ tone, label, className = '' }) {
+  return <span className={`status-pill ${tone} ${className}`.trim()}>{label}</span>;
 }
 
 function ResultBanner({ tone, text }) {
@@ -2026,6 +2662,19 @@ function InfoIconWithPopover({ info }) {
   );
 }
 
+function ModalCloseButton({ onClick }) {
+  return (
+    <button
+      className="setup-icon-button setup-icon-button-danger"
+      onClick={onClick}
+      title="Close"
+      aria-label="Close"
+    >
+      <XCircle size={20} weight="duotone" aria-hidden="true" />
+    </button>
+  );
+}
+
 function PasswordField({ value, onChange }) {
   const [visible, setVisible] = useState(false);
 
@@ -2043,10 +2692,6 @@ function PasswordField({ value, onChange }) {
       </button>
     </div>
   );
-}
-
-function IconRefresh() {
-  return <ArrowsClockwise size={20} weight="duotone" aria-hidden="true" />;
 }
 
 function IconSave() {

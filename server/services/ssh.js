@@ -9,6 +9,8 @@ const privateKey = path.join(sshDir, 'id_ed25519');
 const publicKey = `${privateKey}.pub`;
 const remotePeerPrivateKey = '~/.ssh/ptsh_peer_ed25519';
 const remotePeerPublicKey = `${remotePeerPrivateKey}.pub`;
+const containerKeyComment = 'session-commander-container';
+const peerKeyComment = 'session-commander-peer';
 const PUBLIC_KEY_LINE_PATTERN = /^ssh-(ed25519|rsa)\s+[A-Za-z0-9+/=]+(?:\s+.+)?$/;
 
 function buildSshTarget(target) {
@@ -154,7 +156,16 @@ export async function generateContainerKeypair() {
   try {
     await fs.access(privateKey);
   } catch {
-    await execFileAsync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', privateKey]);
+    await execFileAsync('ssh-keygen', [
+      '-t',
+      'ed25519',
+      '-N',
+      '',
+      '-C',
+      containerKeyComment,
+      '-f',
+      privateKey
+    ]);
   }
 
   const pub = await fs.readFile(publicKey, 'utf8');
@@ -255,7 +266,9 @@ export async function generateRemoteKeypairWithPassword(target, password) {
   const remoteCommand = [
     'mkdir -p ~/.ssh',
     'chmod 700 ~/.ssh',
-    `[ -f ${remotePeerPrivateKey} ] || ssh-keygen -t ed25519 -N "" -f ${remotePeerPrivateKey} >/dev/null 2>&1`,
+    `[ -f ${remotePeerPrivateKey} ] || ssh-keygen -t ed25519 -N "" -C ${quote(
+      peerKeyComment
+    )} -f ${remotePeerPrivateKey} >/dev/null 2>&1`,
     `chmod 600 ${remotePeerPrivateKey}`,
     `chmod 644 ${remotePeerPublicKey}`,
     `cat ${remotePeerPublicKey}`
@@ -339,6 +352,19 @@ function removeLineFromAuthorizedKeysCommand(publicKeyValue) {
   ].join('\n');
 }
 
+function removePatternFromAuthorizedKeysCommand(pattern) {
+  if (!pattern?.trim()) return 'true';
+  return [
+    'if [ -f ~/.ssh/authorized_keys ]; then',
+    '  tmp_file=$(mktemp)',
+    `  grep -F -v -- ${quote(pattern.trim())} ~/.ssh/authorized_keys > "$tmp_file" || true`,
+    '  cat "$tmp_file" > ~/.ssh/authorized_keys',
+    '  rm -f "$tmp_file"',
+    '  chmod 600 ~/.ssh/authorized_keys',
+    'fi'
+  ].join('\n');
+}
+
 export async function removeToolKeysFromSystems({ storageTarget, workingTarget }) {
   const warnings = [];
 
@@ -365,7 +391,7 @@ export async function removeToolKeysFromSystems({ storageTarget, workingTarget }
     if (storageTarget?.host && storageTarget?.username) {
       const result = await runRemoteCommand(
         storageTarget,
-        'cat ~/.ssh/ptsh_peer_ed25519.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true'
+        'cat ~/.ssh/ptsh_peer_ed25519.pub 2>/dev/null || true'
       );
       storagePeerKey = result.stdout || '';
     }
@@ -377,7 +403,7 @@ export async function removeToolKeysFromSystems({ storageTarget, workingTarget }
     if (workingTarget?.host && workingTarget?.username) {
       const result = await runRemoteCommand(
         workingTarget,
-        'cat ~/.ssh/ptsh_peer_ed25519.pub 2>/dev/null || cat ~/.ssh/id_ed25519.pub 2>/dev/null || true'
+        'cat ~/.ssh/ptsh_peer_ed25519.pub 2>/dev/null || true'
       );
       workingPeerKey = result.stdout || '';
     }
@@ -388,9 +414,11 @@ export async function removeToolKeysFromSystems({ storageTarget, workingTarget }
   await safeRun(
     storageTarget,
     [
+      removePatternFromAuthorizedKeysCommand(containerKeyComment),
+      removePatternFromAuthorizedKeysCommand(peerKeyComment),
       removeLineFromAuthorizedKeysCommand(containerKey),
       removeLineFromAuthorizedKeysCommand(workingPeerKey),
-      'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub'
+      'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub'
     ].join('\n'),
     'storage cleanup'
   );
@@ -398,14 +426,234 @@ export async function removeToolKeysFromSystems({ storageTarget, workingTarget }
   await safeRun(
     workingTarget,
     [
+      removePatternFromAuthorizedKeysCommand(containerKeyComment),
+      removePatternFromAuthorizedKeysCommand(peerKeyComment),
       removeLineFromAuthorizedKeysCommand(containerKey),
       removeLineFromAuthorizedKeysCommand(storagePeerKey),
-      'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub'
+      'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub'
     ].join('\n'),
     'working cleanup'
   );
 
   return { warnings };
+}
+
+async function fileExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readRemotePeerPublicKeyWithPassword(target, password) {
+  try {
+    const { stdout } = await execPasswordSsh(
+      target,
+      password,
+      'cat ~/.ssh/ptsh_peer_ed25519.pub 2>/dev/null || true'
+    );
+    return extractPublicKey(stdout, `${target.host} public key`);
+  } catch {
+    return '';
+  }
+}
+
+async function inspectRemoteToolKeysWithPassword(target, password) {
+  const command = [
+    'peer_priv=0; [ -f ~/.ssh/ptsh_peer_ed25519 ] && peer_priv=1',
+    'peer_pub=0; [ -f ~/.ssh/ptsh_peer_ed25519.pub ] && peer_pub=1',
+    'printf "peer_priv=%s\\npeer_pub=%s\\n" "$peer_priv" "$peer_pub"'
+  ].join('; ');
+
+  const { stdout } = await execPasswordSsh(target, password, command);
+  const flags = {
+    peerPrivate: false,
+    peerPublic: false
+  };
+
+  for (const line of String(stdout || '').split('\n')) {
+    const [key, value] = line.split('=');
+    const enabled = String(value || '').trim() === '1';
+    if (key === 'peer_priv') flags.peerPrivate = enabled;
+    if (key === 'peer_pub') flags.peerPublic = enabled;
+  }
+
+  return {
+    ...flags,
+    hasAny: flags.peerPrivate || flags.peerPublic
+  };
+}
+
+export async function clearToolKeysWithPasswords({
+  storageTarget,
+  storagePassword,
+  workingTarget,
+  workingPassword
+}) {
+  const warnings = [];
+  const localContainerPrivateKey = await fileExists(privateKey);
+  const localContainerPublicKey = await fileExists(publicKey);
+
+  const [storageState, workingState] = await Promise.all([
+    inspectRemoteToolKeysWithPassword(storageTarget, storagePassword),
+    inspectRemoteToolKeysWithPassword(workingTarget, workingPassword)
+  ]);
+
+  const keysFound =
+    localContainerPrivateKey ||
+    localContainerPublicKey ||
+    storageState.hasAny ||
+    workingState.hasAny;
+
+  if (!keysFound) {
+    return {
+      warnings,
+      keysFound: false,
+      cleared: false,
+      report: {
+        container: {
+          before: {
+            privateKey: localContainerPrivateKey,
+            publicKey: localContainerPublicKey
+          },
+          after: {
+            privateKey: localContainerPrivateKey,
+            publicKey: localContainerPublicKey
+          },
+          removed: false
+        },
+        storage: {
+          before: storageState,
+          after: storageState,
+          removed: false
+        },
+        working: {
+          before: workingState,
+          after: workingState,
+          removed: false
+        }
+      },
+      details: {
+        localContainerPrivateKey,
+        localContainerPublicKey,
+        storage: storageState,
+        working: workingState
+      }
+    };
+  }
+
+  let containerKey = '';
+  try {
+    containerKey = await getContainerPublicKey();
+  } catch {
+    containerKey = '';
+  }
+
+  const [storagePeerKey, workingPeerKey] = await Promise.all([
+    readRemotePeerPublicKeyWithPassword(storageTarget, storagePassword),
+    readRemotePeerPublicKeyWithPassword(workingTarget, workingPassword)
+  ]);
+
+  try {
+    await execPasswordSsh(
+      storageTarget,
+      storagePassword,
+      [
+        removePatternFromAuthorizedKeysCommand(containerKeyComment),
+        removePatternFromAuthorizedKeysCommand(peerKeyComment),
+        removeLineFromAuthorizedKeysCommand(containerKey),
+        removeLineFromAuthorizedKeysCommand(workingPeerKey),
+        'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub'
+      ].join('\n')
+    );
+  } catch (error) {
+    warnings.push(`storage cleanup: ${error.message}`);
+  }
+
+  try {
+    await execPasswordSsh(
+      workingTarget,
+      workingPassword,
+      [
+        removePatternFromAuthorizedKeysCommand(containerKeyComment),
+        removePatternFromAuthorizedKeysCommand(peerKeyComment),
+        removeLineFromAuthorizedKeysCommand(containerKey),
+        removeLineFromAuthorizedKeysCommand(storagePeerKey),
+        'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub'
+      ].join('\n')
+    );
+  } catch (error) {
+    warnings.push(`working cleanup: ${error.message}`);
+  }
+
+  try {
+    await fs.rm(privateKey, { force: true });
+    await fs.rm(publicKey, { force: true });
+  } catch (error) {
+    warnings.push(`container key cleanup: ${error.message}`);
+  }
+
+  const localContainerPrivateKeyAfter = await fileExists(privateKey);
+  const localContainerPublicKeyAfter = await fileExists(publicKey);
+
+  let storageStateAfter = storageState;
+  let workingStateAfter = workingState;
+
+  try {
+    storageStateAfter = await inspectRemoteToolKeysWithPassword(storageTarget, storagePassword);
+  } catch (error) {
+    warnings.push(`storage post-check: ${error.message}`);
+  }
+
+  try {
+    workingStateAfter = await inspectRemoteToolKeysWithPassword(workingTarget, workingPassword);
+  } catch (error) {
+    warnings.push(`working post-check: ${error.message}`);
+  }
+
+  const containerRemoved =
+    (localContainerPrivateKey || localContainerPublicKey) &&
+    !localContainerPrivateKeyAfter &&
+    !localContainerPublicKeyAfter;
+  const storageRemoved = storageState.hasAny && !storageStateAfter.hasAny;
+  const workingRemoved = workingState.hasAny && !workingStateAfter.hasAny;
+
+  return {
+    warnings,
+    keysFound: true,
+    cleared: true,
+    report: {
+      container: {
+        before: {
+          privateKey: localContainerPrivateKey,
+          publicKey: localContainerPublicKey
+        },
+        after: {
+          privateKey: localContainerPrivateKeyAfter,
+          publicKey: localContainerPublicKeyAfter
+        },
+        removed: containerRemoved
+      },
+      storage: {
+        before: storageState,
+        after: storageStateAfter,
+        removed: storageRemoved
+      },
+      working: {
+        before: workingState,
+        after: workingStateAfter,
+        removed: workingRemoved
+      }
+    },
+    details: {
+      localContainerPrivateKey,
+      localContainerPublicKey,
+      storage: storageState,
+      working: workingState
+    }
+  };
 }
 
 export async function refreshContainerKnownHosts({ storageTarget, workingTargets = [] }) {

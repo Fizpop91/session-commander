@@ -69,6 +69,10 @@ data/ssh/id_ed25519
 
 data/ssh/id_ed25519.pub
 
+Container key comment (for identification/cleanup):
+
+session-commander-container
+
 Step 3: Enable Direct NAS-to-NAS Trust
 
 The app needs the NAS systems to trust each other so one NAS can push files directly to the other.
@@ -104,6 +108,16 @@ generates an SSH keypair on the Working Location account (if needed)
 installs the Working Location public key into the Storage Location account’s authorized_keys
 
 tests direct SSH from Working to Storage
+
+Peer key location on each remote system:
+
+~/.ssh/ptsh_peer_ed25519
+
+~/.ssh/ptsh_peer_ed25519.pub
+
+Peer key comment (for identification/cleanup):
+
+session-commander-peer
 
 This enables:
 
@@ -148,6 +162,31 @@ Persistent access is provided through SSH keys.
 The container stores only its own SSH keypair and non-sensitive config.
 
 NAS-to-NAS trust is established only between the configured SSH accounts.
+
+Clear Config + Clear SSH Keys behavior
+
+The app clears keys in two groups:
+
+container -> locations:
+
+removes /app/data/ssh/id_ed25519 and /app/data/ssh/id_ed25519.pub in the container
+
+removes authorized_keys entries matching the current container public key
+
+removes authorized_keys entries with session-commander-container marker
+
+location -> location:
+
+removes ~/.ssh/ptsh_peer_ed25519 and ~/.ssh/ptsh_peer_ed25519.pub on both configured systems
+
+removes authorized_keys entries matching the current peer public keys
+
+removes authorized_keys entries with session-commander-peer marker
+
+Important:
+
+Very old keys created before marker-based cleanup may still exist if they were generated under older comments.
+Those can be removed manually from authorized_keys if needed.
 
 For best security, use dedicated service accounts where possible instead of root, unless the NAS platform requires root for SSH access. On some systems, only root may be practical for the initial version.
 
