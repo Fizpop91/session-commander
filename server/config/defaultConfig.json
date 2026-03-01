@@ -1,0 +1,36 @@
+{
+  "appName": "Session Commander",
+  "theme": "system",
+  "storageLocation": {
+    "host": "",
+    "port": 22,
+    "username": "",
+    "rootPath": "",
+    "templateDirectoryPath": ""
+  },
+  "workingLocations": [
+    {
+      "id": "working-1",
+      "name": "Working Location 1",
+      "host": "",
+      "port": 22,
+      "username": "",
+      "rootPath": "",
+      "isPrimary": true,
+      "setupState": {
+        "containerAuthorized": false,
+        "storageToWorking": false,
+        "workingToStorage": false
+      }
+    }
+  ],
+  "selectedWorkingLocationId": "working-1",
+  "templateNaming": {
+    "defaultSchemeId": "",
+    "schemes": []
+  },
+  "security": {
+    "authEnabled": false,
+    "users": []
+  }
+}

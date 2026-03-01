@@ -1,0 +1,26 @@
+{
+  "name": "session-commander",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently \"npm:server:dev\" \"npm:web:dev\"",
+    "server:dev": "node --watch server/index.js",
+    "web:dev": "vite ./web",
+    "web:build": "vite build ./web --outDir ../server/public",
+    "web:preview": "vite preview ./web"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.1.2",
+    "vite": "^7.1.0"
+  }
+}

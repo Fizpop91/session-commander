@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+server/public/
+data/config.json
+data/auth-sessions.json
+data/ssh/

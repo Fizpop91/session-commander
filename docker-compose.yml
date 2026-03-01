@@ -1,0 +1,9 @@
+services:
+  session-commander:
+    build: .
+    container_name: session-commander
+    ports:
+      - "3004:3000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
