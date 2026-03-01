@@ -180,6 +180,25 @@ export default function SetupPage({
   });
   const [changePasswordNotice, setChangePasswordNotice] = useState({ tone: 'pending', text: '' });
   const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+  const isUserPasswordLengthValid = changePasswordModal.password.length >= 8;
+  const isUserPasswordMatchValid =
+    Boolean(changePasswordModal.password) &&
+    Boolean(changePasswordModal.confirmPassword) &&
+    changePasswordModal.password === changePasswordModal.confirmPassword;
+  const userPasswordLengthTone = changePasswordModal.password ? (isUserPasswordLengthValid ? 'success' : 'error') : 'pending';
+  const userPasswordMatchTone =
+    !changePasswordModal.password && !changePasswordModal.confirmPassword
+      ? 'pending'
+      : isUserPasswordMatchValid
+      ? 'success'
+      : !changePasswordModal.password || !changePasswordModal.confirmPassword
+      ? 'pending'
+      : 'error';
+  const canSubmitUserPasswordChange =
+    Boolean(changePasswordModal.username) &&
+    isUserPasswordLengthValid &&
+    isUserPasswordMatchValid &&
+    !changePasswordLoading;
   const [firstUserModalOpen, setFirstUserModalOpen] = useState(false);
   const [firstUserDraft, setFirstUserDraft] = useState({
     username: '',
@@ -187,6 +206,20 @@ export default function SetupPage({
     confirmPassword: ''
   });
   const [firstUserNotice, setFirstUserNotice] = useState({ tone: 'pending', text: '' });
+  const isFirstUserPasswordLengthValid = firstUserDraft.password.length >= 8;
+  const isFirstUserPasswordMatchValid =
+    Boolean(firstUserDraft.password) &&
+    Boolean(firstUserDraft.confirmPassword) &&
+    firstUserDraft.password === firstUserDraft.confirmPassword;
+  const firstUserPasswordLengthTone = firstUserDraft.password ? (isFirstUserPasswordLengthValid ? 'success' : 'error') : 'pending';
+  const firstUserPasswordMatchTone =
+    !firstUserDraft.password && !firstUserDraft.confirmPassword
+      ? 'pending'
+      : isFirstUserPasswordMatchValid
+      ? 'success'
+      : !firstUserDraft.password || !firstUserDraft.confirmPassword
+      ? 'pending'
+      : 'error';
   const [clearConfigModalOpen, setClearConfigModalOpen] = useState(false);
   const [clearKeysModal, setClearKeysModal] = useState({
     open: false,
@@ -1036,6 +1069,7 @@ export default function SetupPage({
   }
 
   function updateFirstUserDraft(field, value) {
+    setFirstUserNotice({ tone: 'pending', text: '' });
     setFirstUserDraft((current) => ({
       ...current,
       [field]: value
@@ -1207,6 +1241,16 @@ export default function SetupPage({
     setChangePasswordNotice({ tone: 'pending', text: '' });
   }
 
+  function closeChangePasswordModal() {
+    setChangePasswordModal({
+      open: false,
+      username: '',
+      password: '',
+      confirmPassword: ''
+    });
+    setChangePasswordNotice({ tone: 'pending', text: '' });
+  }
+
   async function handleChangeUserPassword() {
     try {
       if (!changePasswordModal.username) {
@@ -1225,12 +1269,7 @@ export default function SetupPage({
       const payload = await api.changeUserPassword(changePasswordModal.username, changePasswordModal.password);
       setUsers(Array.isArray(payload.users) ? payload.users : []);
       await refreshSecurityState();
-      setChangePasswordModal({
-        open: false,
-        username: '',
-        password: '',
-        confirmPassword: ''
-      });
+      closeChangePasswordModal();
       setGlobalMessage(`Password updated for "${changePasswordModal.username}".`);
     } catch (error) {
       setChangePasswordNotice({ tone: 'error', text: error.message });
@@ -2202,82 +2241,64 @@ export default function SetupPage({
       {changePasswordModal.open ? (
         <div
           className="scheme-modal-backdrop"
-          onClick={() => {
-            setChangePasswordModal({
-              open: false,
-              username: '',
-              password: '',
-              confirmPassword: ''
-            });
-            setChangePasswordNotice({ tone: 'pending', text: '' });
-          }}
+          onClick={closeChangePasswordModal}
         >
           <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Change Password</h4>
-              <ModalCloseButton
-                onClick={() => {
-                  setChangePasswordModal({
-                    open: false,
-                    username: '',
-                    password: '',
-                    confirmPassword: ''
-                  });
-                  setChangePasswordNotice({ tone: 'pending', text: '' });
-                }}
-              />
+              <ModalCloseButton onClick={closeChangePasswordModal} />
             </div>
             <p>
               User: <strong>{changePasswordModal.username}</strong>
             </p>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                New Password
+            <section className="password-status-line" style={{ marginTop: 12 }}>
+              <div className="password-status-field">
+                <span className="password-status-label">New Password</span>
                 <PasswordField
                   value={changePasswordModal.password}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setChangePasswordNotice({ tone: 'pending', text: '' });
                     setChangePasswordModal((current) => ({
                       ...current,
                       password: e.target.value
-                    }))
+                    }));
+                  }}
+                />
+              </div>
+              <div className="password-inline-status">
+                <span className="password-status-label-spacer" aria-hidden="true">New Password</span>
+                <ResultBanner
+                  tone={userPasswordLengthTone}
+                  text={
+                    isUserPasswordLengthValid
+                      ? 'Password length is valid.'
+                      : 'Password must be at least 8 characters.'
                   }
                 />
-              </label>
+              </div>
             </section>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                Confirm Password
+            <section className="password-status-line" style={{ marginTop: 12 }}>
+              <div className="password-status-field">
+                <span className="password-status-label">Confirm Password</span>
                 <PasswordField
                   value={changePasswordModal.confirmPassword}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setChangePasswordNotice({ tone: 'pending', text: '' });
                     setChangePasswordModal((current) => ({
                       ...current,
                       confirmPassword: e.target.value
-                    }))
-                  }
+                    }));
+                  }}
                 />
-              </label>
+              </div>
+              <div className="password-inline-status">
+                <span className="password-status-label-spacer" aria-hidden="true">Confirm Password</span>
+                <ResultBanner
+                  tone={userPasswordMatchTone}
+                  text={isUserPasswordMatchValid ? 'Passwords match.' : 'Passwords must match.'}
+                />
+              </div>
             </section>
-            {changePasswordModal.password ? (
-              <ResultBanner
-                tone={changePasswordModal.password.length >= 8 ? 'success' : 'error'}
-                text={
-                  changePasswordModal.password.length >= 8
-                    ? 'Password length is valid.'
-                    : 'Password must be at least 8 characters.'
-                }
-              />
-            ) : null}
-            {changePasswordModal.password || changePasswordModal.confirmPassword ? (
-              <ResultBanner
-                tone={changePasswordModal.password === changePasswordModal.confirmPassword ? 'success' : 'error'}
-                text={
-                  changePasswordModal.password === changePasswordModal.confirmPassword
-                    ? 'Passwords match.'
-                    : 'Passwords do not match.'
-                }
-              />
-            ) : null}
             {changePasswordNotice.text ? (
               <ResultBanner tone={changePasswordNotice.tone} text={changePasswordNotice.text} />
             ) : null}
@@ -2285,7 +2306,7 @@ export default function SetupPage({
               <button
                 className="button-primary"
                 onClick={handleChangeUserPassword}
-                disabled={changePasswordLoading}
+                disabled={!canSubmitUserPasswordChange}
               >
                 {changePasswordLoading ? 'Working…' : 'Change'}
               </button>
@@ -2302,7 +2323,7 @@ export default function SetupPage({
             setFirstUserNotice({ tone: 'pending', text: '' });
           }}
         >
-          <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
+          <section className="scheme-modal add-user-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Create Admin User</h4>
               <ModalCloseButton
@@ -2331,48 +2352,46 @@ export default function SetupPage({
                 </select>
               </label>
             </section>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                Password
+            <section className="add-user-password-line" style={{ marginTop: 12 }}>
+              <div className="add-user-password-field">
+                <span className="add-user-password-label">Password</span>
                 <PasswordField
                   value={firstUserDraft.password}
                   onChange={(e) => updateFirstUserDraft('password', e.target.value)}
                 />
-              </label>
+              </div>
+              <div className="add-user-inline-status">
+                <span className="add-user-status-label-spacer" aria-hidden="true">Password</span>
+                <ResultBanner
+                  tone={firstUserPasswordLengthTone}
+                  text={
+                    isFirstUserPasswordLengthValid
+                      ? 'Password length is valid.'
+                      : 'Password must be at least 8 characters.'
+                  }
+                />
+              </div>
             </section>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                Confirm Password
+            <section className="add-user-password-line" style={{ marginTop: 12 }}>
+              <div className="add-user-password-field">
+                <span className="add-user-password-label">Confirm Password</span>
                 <PasswordField
                   value={firstUserDraft.confirmPassword}
                   onChange={(e) => updateFirstUserDraft('confirmPassword', e.target.value)}
                 />
-              </label>
+              </div>
+              <div className="add-user-inline-status">
+                <span className="add-user-status-label-spacer" aria-hidden="true">Confirm Password</span>
+                <ResultBanner
+                  tone={firstUserPasswordMatchTone}
+                  text={isFirstUserPasswordMatchValid ? 'Passwords match.' : 'Passwords must match.'}
+                />
+              </div>
             </section>
-            {firstUserDraft.password ? (
-              <ResultBanner
-                tone={firstUserDraft.password.length >= 8 ? 'success' : 'error'}
-                text={
-                  firstUserDraft.password.length >= 8
-                    ? 'Password length is valid.'
-                    : 'Password must be at least 8 characters.'
-                }
-              />
-            ) : null}
-            {firstUserDraft.password || firstUserDraft.confirmPassword ? (
-              <ResultBanner
-                tone={firstUserDraft.password === firstUserDraft.confirmPassword ? 'success' : 'error'}
-                text={
-                  firstUserDraft.password === firstUserDraft.confirmPassword
-                    ? 'Passwords match.'
-                    : 'Passwords do not match.'
-                }
-              />
-            ) : null}
             {firstUserNotice.text ? (
               <ResultBanner tone={firstUserNotice.tone} text={firstUserNotice.text} />
             ) : null}
-            <div className="button-row" style={{ marginTop: 12 }}>
+            <div className="button-row add-user-actions">
               <button
                 className="button-primary"
                 onClick={handleCreateFirstUserAndEnableAuth}

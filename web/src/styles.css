@@ -989,6 +989,7 @@ h1, h2, h3, h4, p {
   margin-top: 18px;
 }
 
+.password-status-line,
 .add-user-password-line {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
@@ -996,6 +997,7 @@ h1, h2, h3, h4, p {
   align-items: start;
 }
 
+.password-status-field,
 .add-user-password-field {
   display: flex;
   flex-direction: column;
@@ -1003,10 +1005,12 @@ h1, h2, h3, h4, p {
   min-width: 0;
 }
 
+.password-status-label,
 .add-user-password-label {
   font-weight: 600;
 }
 
+.password-inline-status,
 .add-user-inline-status {
   display: flex;
   flex-direction: column;
@@ -1015,6 +1019,7 @@ h1, h2, h3, h4, p {
   align-self: start;
 }
 
+.password-status-label-spacer,
 .add-user-status-label-spacer {
   visibility: hidden;
   font-weight: 600;
@@ -1022,6 +1027,7 @@ h1, h2, h3, h4, p {
   white-space: nowrap;
 }
 
+.password-inline-status .result-banner,
 .add-user-inline-status .result-banner {
   margin-top: 0;
   padding: 10px 12px;
@@ -1030,6 +1036,7 @@ h1, h2, h3, h4, p {
 }
 
 @media (max-width: 860px) {
+  .password-status-line,
   .add-user-password-line {
     grid-template-columns: 1fr;
     align-items: stretch;

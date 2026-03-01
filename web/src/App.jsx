@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CaretCircleDown, Eye, EyeClosed, FolderOpen, GearSix, Repeat, ShippingContainer } from '@phosphor-icons/react';
+import { CaretCircleDown, Eye, EyeClosed, FolderOpen, GearSix, Repeat, ShippingContainer, XCircle } from '@phosphor-icons/react';
 import BrowsePage from './pages/BrowsePage.jsx';
 import SetupPage from './pages/SetupPage.jsx';
 import TemplatePage from './pages/TemplatePage.jsx';
@@ -75,6 +75,21 @@ export default function App() {
   const [changePasswordNotice, setChangePasswordNotice] = useState({ tone: 'pending', text: '' });
   const [changePasswordLoading, setChangePasswordLoading] = useState(false);
   const userMenuRef = useRef(null);
+  const isOwnPasswordLengthValid = changePasswordDraft.password.length >= 8;
+  const isOwnPasswordMatchValid =
+    Boolean(changePasswordDraft.password) &&
+    Boolean(changePasswordDraft.confirmPassword) &&
+    changePasswordDraft.password === changePasswordDraft.confirmPassword;
+  const canSubmitOwnPasswordChange = isOwnPasswordLengthValid && isOwnPasswordMatchValid && !changePasswordLoading;
+  const ownPasswordLengthTone = changePasswordDraft.password ? (isOwnPasswordLengthValid ? 'success' : 'error') : 'pending';
+  const ownPasswordMatchTone =
+    !changePasswordDraft.password && !changePasswordDraft.confirmPassword
+      ? 'pending'
+      : isOwnPasswordMatchValid
+      ? 'success'
+      : !changePasswordDraft.password || !changePasswordDraft.confirmPassword
+      ? 'pending'
+      : 'error';
 
   useEffect(() => {
     try {
@@ -242,6 +257,11 @@ export default function App() {
     setUserMenuOpen(false);
   }
 
+  function closeChangePasswordModal() {
+    setChangePasswordModalOpen(false);
+    setChangePasswordNotice({ tone: 'pending', text: '' });
+  }
+
   async function handleChangeOwnPassword() {
     try {
       if (changePasswordDraft.password !== changePasswordDraft.confirmPassword) {
@@ -254,7 +274,7 @@ export default function App() {
       setChangePasswordLoading(true);
       setChangePasswordNotice({ tone: 'pending', text: '' });
       await api.changeOwnPassword(changePasswordDraft.password);
-      setChangePasswordModalOpen(false);
+      closeChangePasswordModal();
     } catch (error) {
       setChangePasswordNotice({ tone: 'error', text: error.message });
     } finally {
@@ -413,79 +433,76 @@ export default function App() {
       {changePasswordModalOpen ? (
         <div
           className="scheme-modal-backdrop"
-          onClick={() => {
-            setChangePasswordModalOpen(false);
-            setChangePasswordNotice({ tone: 'pending', text: '' });
-          }}
+          onClick={closeChangePasswordModal}
         >
-          <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
+          <section className="scheme-modal add-user-modal" onClick={(e) => e.stopPropagation()}>
             <div className="panel-header">
               <h4>Change Password</h4>
               <button
-                onClick={() => {
-                  setChangePasswordModalOpen(false);
-                  setChangePasswordNotice({ tone: 'pending', text: '' });
-                }}
+                className="setup-icon-button setup-icon-button-danger"
+                onClick={closeChangePasswordModal}
+                title="Close"
+                aria-label="Close"
               >
-                Close
+                <XCircle size={20} weight="duotone" aria-hidden="true" />
               </button>
             </div>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                New Password
+            <section className="add-user-password-line" style={{ marginTop: 12 }}>
+              <div className="add-user-password-field">
+                <span className="add-user-password-label">New Password</span>
                 <PasswordField
                   value={changePasswordDraft.password}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setChangePasswordNotice({ tone: 'pending', text: '' });
                     setChangePasswordDraft((current) => ({
                       ...current,
                       password: e.target.value
-                    }))
+                    }));
+                  }}
+                />
+              </div>
+              <div className="add-user-inline-status">
+                <span className="add-user-status-label-spacer" aria-hidden="true">New Password</span>
+                <ResultBanner
+                  tone={ownPasswordLengthTone}
+                  text={
+                    isOwnPasswordLengthValid
+                      ? 'Password length is valid.'
+                      : 'Password must be at least 8 characters.'
                   }
                 />
-              </label>
+              </div>
             </section>
-            <section className="grid two-col" style={{ marginTop: 12 }}>
-              <label>
-                Confirm Password
+            <section className="add-user-password-line" style={{ marginTop: 12 }}>
+              <div className="add-user-password-field">
+                <span className="add-user-password-label">Confirm Password</span>
                 <PasswordField
                   value={changePasswordDraft.confirmPassword}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setChangePasswordNotice({ tone: 'pending', text: '' });
                     setChangePasswordDraft((current) => ({
                       ...current,
                       confirmPassword: e.target.value
-                    }))
-                  }
+                    }));
+                  }}
                 />
-              </label>
+              </div>
+              <div className="add-user-inline-status">
+                <span className="add-user-status-label-spacer" aria-hidden="true">Confirm Password</span>
+                <ResultBanner
+                  tone={ownPasswordMatchTone}
+                  text={isOwnPasswordMatchValid ? 'Passwords match.' : 'Passwords must match.'}
+                />
+              </div>
             </section>
-            {changePasswordDraft.password ? (
-              <ResultBanner
-                tone={changePasswordDraft.password.length >= 8 ? 'success' : 'error'}
-                text={
-                  changePasswordDraft.password.length >= 8
-                    ? 'Password length is valid.'
-                    : 'Password must be at least 8 characters.'
-                }
-              />
-            ) : null}
-            {changePasswordDraft.password || changePasswordDraft.confirmPassword ? (
-              <ResultBanner
-                tone={changePasswordDraft.password === changePasswordDraft.confirmPassword ? 'success' : 'error'}
-                text={
-                  changePasswordDraft.password === changePasswordDraft.confirmPassword
-                    ? 'Passwords match.'
-                    : 'Passwords do not match.'
-                }
-              />
-            ) : null}
             {changePasswordNotice.text ? (
               <ResultBanner tone={changePasswordNotice.tone} text={changePasswordNotice.text} />
             ) : null}
-            <div className="button-row" style={{ marginTop: 12 }}>
+            <div className="button-row add-user-actions">
               <button
                 className="button-primary"
                 onClick={handleChangeOwnPassword}
-                disabled={changePasswordLoading}
+                disabled={!canSubmitOwnPasswordChange}
               >
                 {changePasswordLoading ? 'Working…' : 'Change'}
               </button>
