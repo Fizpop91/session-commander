@@ -1555,7 +1555,7 @@ export default function SetupPage({
         </div>
         <div className="result-banner pending setup-mac-note">
           For Mac&apos;s, make sure SSH is enabled in System Settings -> General -> Sharing ->
-          Remote Login, as well as Wake for Network Access in General -> Battery/Energy -> Options.
+          Remote Login, as well as Wake for Network Access in General -> Energy.
           To get the path of a folder, right click the folder while holding option, then select
           "copy foldername as pathname".
         </div>

@@ -1,225 +1,172 @@
-Setup Process
+# Setup Process
 
-The Setup page prepares all SSH trust required for Session Commander to run direct NAS-to-NAS transfers.
+The Setup page prepares all `SSH` trust required for **Session Commander** to run direct location-to-location transfers, as well as container-to-location browsing.
 
-What the app needs
+---
 
-Session Commander uses three systems:
+## App Requirements
 
-Storage Location: source of backups and templates
+**Session Commander** uses three systems:
 
-Working Location: destination for active sessions, and source for backups back to Storage
-
-Docker container: the web app and orchestrator
+- **Storage Location**: Source of session backups and templates.
+- **Working Location**: Location where sessions are run from. This can be a network share or a folder on your local machine.
+- **Docker container**: the web app and orchestrator
 
 The container does not copy files through itself.
-Instead, it connects over SSH and tells one NAS to copy directly to the other NAS using scp.
+Instead, it connects over `SSH` and tells one location to copy directly to the other location using `rsync` or `scp` as a backup.
 
-Because of that, SSH trust must exist in multiple directions.
+Because of that, `SSH` trust must exist in multiple directions.
 
-Step 1: Configure Targets
+**Step 1: Configure Targets**
 
-This step stores the connection details for both NAS systems:
+This step stores the connection details for both locations:
 
-host / IP
+- host / IP
+- SSH port
+- username
+- root path used over `SSH`
 
-SSH port
-
-username
-
-root path used over SSH
-
-It also accepts temporary bootstrap passwords for the Storage and Working systems.
+It also accepts temporary bootstrap passwords for the locations.
 
 These passwords are:
 
-used only during setup actions
-
-kept in memory only
-
-not saved to disk
+- Used only during setup actions
+- Kept only in memory and is removed upon refresh
 
 The saved config is written to data/config.json.
 
-Step 2: Authorize Container Access
+**Step 2: Authorize Container Access**
 
-This is a one-click setup step that prepares the Docker container to log into both NAS systems.
+This is a one-click setup step that prepares the Docker container to log into both locations.
 
-When you click Authorize Container, the app:
+When you click "Authorize Container", the app:
 
-generates an SSH keypair inside the container (if it does not already exist)
-
-installs the container public key into the selected SSH account on the Storage Location
-
-installs the container public key into the selected SSH account on the Working Location
-
-tests SSH connectivity to both systems
-
-checks whether scp and rsync are available on each system
+- Generates an `SSH` keypair inside the container (if it does not already exist)
+- Installs the container public key into the selected SSH account on the Storage Location and Working Location
+- Tests `SSH` connectivity to both systems
+- Checks whether `rsync` and `scp` are available on each system
 
 This enables:
 
 container → Storage
-
 container → Working
 
 The container keypair is stored under:
 
-data/ssh/id_ed25519
-
-data/ssh/id_ed25519.pub
+`data/ssh/id_ed25519`
+`data/ssh/id_ed25519.pub`
 
 Container key comment (for identification/cleanup):
 
-session-commander-container
+`session-commander-container`
 
-Step 3: Enable Direct NAS-to-NAS Trust
+**Step 3: Enable Direct location-to-location Trust**
 
-The app needs the NAS systems to trust each other so one NAS can push files directly to the other.
+The app needs the locations to trust each other so one location can push files directly to the other.
 
 This is split into two one-click actions:
 
 Enable Storage → Working
-
 Enable Working → Storage
 
-Enable Storage → Working
+<ins>Enable Storage → Working</ins>
 
 This action:
 
-generates an SSH keypair on the Storage Location account (if needed)
-
-installs the Storage Location public key into the Working Location account’s authorized_keys
-
-tests direct SSH from Storage to Working
+- Generates an `SSH` keypair on the Storage Location account (if needed)
+- Installs the Storage Location public key into the Working Location account’s authorized_keys
+- Tests direct `SSH` from Storage → Working
 
 This enables:
 
-Storage → Working
+**Storage → Working**
+This is used for restoring sessions or copying templates from storage location → working location.
 
-This is used for restoring sessions or copying templates from storage location to working location.
-
-Enable Working → Storage
+<ins>Enable Working → Storage</ins>
 
 This action:
 
-generates an SSH keypair on the Working Location account (if needed)
+- Generates an `SSH` keypair on the Working Location account (if needed)
+- Installs the Working Location public key into the Storage Location account’s authorized_keys
+- Tests direct `SSH` from Working → Storage
 
-installs the Working Location public key into the Storage Location account’s authorized_keys
-
-tests direct SSH from Working to Storage
 
 Peer key location on each remote system:
 
-~/.ssh/ptsh_peer_ed25519
-
-~/.ssh/ptsh_peer_ed25519.pub
+`~/.ssh/ptsh_peer_ed25519`
+`~/.ssh/ptsh_peer_ed25519.pub`
 
 Peer key comment (for identification/cleanup):
 
-session-commander-peer
+`session-commander-peer`
 
 This enables:
 
-Working → Storage
+**Working → Storage**
+This is used for backing up active sessions from working location → storage location.
 
-This is used for backing up active sessions from working location back to storage location.
+**Why this setup is required**
 
-Why this setup is required
-
-Session Commander is designed so file transfers happen directly between the two NAS systems.
+**Session Commander** is designed so file transfers happen directly between the two locations, and not via your working machine, however this doesn't matter if you run sessions locally to your working machine.
 
 That means:
 
-the browser never handles file data
-
-the Docker container does not act as a file relay
-
-the app only coordinates SSH commands
+- The browser never handles file data
+- The Docker container does not act as a file relay
+- The app only coordinates `SSH` commands
 
 This keeps transfers aligned with the intended architecture and avoids routing session data through the local machine.
 
-Transfer method
+---
 
-For v1, Session Commander uses scp for direct folder copies.
+## Transfer Method
 
-scp was chosen because:
+**Session Commander** uses `scp` for direct folder copies.
 
-it is already available on the Storage Location
+`scp` was chosen because:
 
-it is sufficient for the intended replace-not-merge workflow
+- It is sufficient for the intended replace-not-merge workflow
+- It avoids depending on `rsync` being installed. Generally `scp`is installed by default on most systems
 
-it avoids depending on rsync being installed on the Storage Location
+`rsync` is still detected during setup for information, but it is not required for operation yet.
 
-rsync is still detected during setup for information, but it is not required for v1 operation.
+## Security Notes
 
-Security notes
+- Bootstrap passwords are temporary and are not stored
+- Persistent access is provided through `SSH` keys
+- The container stores only its own `SSH` keypair and non-sensitive config
+- Location-to-location trust is established only between the configured `SSH` accounts
 
-Bootstrap passwords are temporary and are not stored.
-
-Persistent access is provided through SSH keys.
-
-The container stores only its own SSH keypair and non-sensitive config.
-
-NAS-to-NAS trust is established only between the configured SSH accounts.
-
-Clear Config + Clear SSH Keys behavior
+**Clear Config + Clear SSH Keys Behavior**
 
 The app clears keys in two groups:
 
-container -> locations:
+container → locations:
 
-removes /app/data/ssh/id_ed25519 and /app/data/ssh/id_ed25519.pub in the container
+- Removes `/app/data/ssh/id_ed25519` and `/app/data/ssh/id_ed25519.pub in the container
+- Removes authorized_keys entries matching the current container public key
+- Removes authorized_keys entries with `session-commander-container` marker
 
-removes authorized_keys entries matching the current container public key
+location → location:
 
-removes authorized_keys entries with session-commander-container marker
+- Removes `~/.ssh/ptsh_peer_ed25519` and `~/.ssh/ptsh_peer_ed25519.pub` on both configured systems
+- Removes authorized_keys entries matching the current peer public keys
+- Removes authorized_keys entries with `session-commander-peer` marker
 
-location -> location:
+**Important:**
 
-removes ~/.ssh/ptsh_peer_ed25519 and ~/.ssh/ptsh_peer_ed25519.pub on both configured systems
+For best security, use dedicated service accounts where possible instead of `root`, unless the platform requires `root` for `SSH` access. On some systems, only `root` may be practical for the initial version.
 
-removes authorized_keys entries matching the current peer public keys
-
-removes authorized_keys entries with session-commander-peer marker
-
-Important:
-
-Very old keys created before marker-based cleanup may still exist if they were generated under older comments.
-Those can be removed manually from authorized_keys if needed.
-
-For best security, use dedicated service accounts where possible instead of root, unless the NAS platform requires root for SSH access. On some systems, only root may be practical for the initial version.
-
-Result of successful setup
+**Result of Successful Setup**
 
 When setup is complete, the following trust relationships exist:
 
 container → Storage
-
 container → Working
-
 Storage → Working
-
 Working → Storage
 
-At that point, the app is ready to browse session folders and perform direct transfers.
+At that point, the app is ready to browse folders and perform direct transfers.
 
-Remote deploy helper (for server-based Docker workflow)
+---
 
-If you sync project files from your Mac to a Docker server, run this on the server:
-
-bash scripts/deploy-server.sh
-
-Options:
-
---no-cache (force full image rebuild)
-
---no-logs (skip tail output)
-
---no-down (skip docker compose down; default is to run down first)
-
---service <name> (override compose service name; default: session-commander)
-
-Example Mac one-liner (sync + deploy):
-
-rsync -az --delete /path/to/session-commander/ user@your-server:/srv/session-commander/ && ssh user@your-server "cd /srv/session-commander && bash scripts/deploy-server.sh"
