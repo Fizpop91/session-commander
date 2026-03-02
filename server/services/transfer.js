@@ -3,6 +3,7 @@ import { spawn } from 'child_process';
 import { getPathStats } from './remoteFs.js';
 import { runRemoteCommand } from './ssh.js';
 import { buildSessionName } from './naming.js';
+import { notifyTransferEvent } from './notifications.js';
 
 const jobs = new Map();
 const peerRsyncKeyPath = '$HOME/.ssh/ptsh_peer_ed25519';
@@ -514,10 +515,23 @@ async function executeTransferJob({
           Number(jobs.get(jobId)?.progress?.transferredBytes || 0) || estimatedBytes
       }
     });
+    void notifyTransferEvent({
+      transferType: type,
+      outcome: 'completed',
+      sourcePath,
+      destinationPath
+    });
   } catch (error) {
     updateJob(jobId, {
       state: 'failed',
       phase: 'failed',
+      error: error.message
+    });
+    void notifyTransferEvent({
+      transferType: type,
+      outcome: 'failed',
+      sourcePath,
+      destinationPath,
       error: error.message
     });
   }

@@ -1,12 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CaretCircleLeft, DownloadSimple, Eye, EyeClosed, Fingerprint, FloppyDiskBack, FolderOpen, GearSix, Info, PlusCircle, SecurityCamera, ShippingContainer, Trash, UploadSimple, Users, XCircle } from '@phosphor-icons/react';
+import { BellRinging, CaretCircleLeft, DownloadSimple, Eye, EyeClosed, Fingerprint, FloppyDiskBack, FolderOpen, GearSix, Info, PlusCircle, SecurityCamera, ShippingContainer, Trash, UploadSimple, Users, XCircle } from '@phosphor-icons/react';
 import { api } from '../lib/api.js';
 
 const SETTINGS_TAB_KEYS = {
   setup: 'setup',
   security: 'security',
-  users: 'users'
+  users: 'users',
+  notifications: 'notifications'
 };
+
+function defaultNotifications() {
+  return {
+    smtp: {
+      host: '',
+      port: 587,
+      secure: false,
+      username: '',
+      password: '',
+      from: '',
+      to: ''
+    },
+    preferences: {
+      completedTransfer: false,
+      failedTransfer: true
+    }
+  };
+}
 
 const defaultWorkingLocation = (index = 1) => ({
   id: `working-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
@@ -34,7 +53,8 @@ const defaultState = {
     templateDirectoryPath: ''
   },
   workingLocations: [defaultWorkingLocation(1)],
-  selectedWorkingLocationId: null
+  selectedWorkingLocationId: null,
+  notifications: defaultNotifications()
 };
 
 function hasConfiguredTarget(target) {
@@ -83,12 +103,34 @@ function normalizeConfig(config) {
     workingLocations[0]?.id ||
     null;
 
+  const notificationDefaults = defaultNotifications();
+  const notifications = {
+    smtp: {
+      host: config?.notifications?.smtp?.host || notificationDefaults.smtp.host,
+      port: Number(config?.notifications?.smtp?.port || notificationDefaults.smtp.port),
+      secure: Boolean(config?.notifications?.smtp?.secure),
+      username: config?.notifications?.smtp?.username || notificationDefaults.smtp.username,
+      password: config?.notifications?.smtp?.password || notificationDefaults.smtp.password,
+      from: config?.notifications?.smtp?.from || notificationDefaults.smtp.from,
+      to: config?.notifications?.smtp?.to || notificationDefaults.smtp.to
+    },
+    preferences: {
+      completedTransfer: Boolean(
+        config?.notifications?.preferences?.completedTransfer ?? notificationDefaults.preferences.completedTransfer
+      ),
+      failedTransfer: Boolean(
+        config?.notifications?.preferences?.failedTransfer ?? notificationDefaults.preferences.failedTransfer
+      )
+    }
+  };
+
   return {
     appName: config?.appName || defaultState.appName,
     theme: config?.theme || defaultState.theme,
     storageLocation,
     workingLocations,
-    selectedWorkingLocationId
+    selectedWorkingLocationId,
+    notifications
   };
 }
 
@@ -247,6 +289,13 @@ export default function SetupPage({
     storage: { tone: 'pending', text: '' },
     working: { tone: 'pending', text: '' }
   });
+  const [notificationsNotice, setNotificationsNotice] = useState({ tone: 'pending', text: '' });
+  const [notificationsSaving, setNotificationsSaving] = useState(false);
+  const [notificationsClearing, setNotificationsClearing] = useState(false);
+  const [notificationsTesting, setNotificationsTesting] = useState(false);
+  const hasAnyNotificationPreference =
+    Boolean(form.notifications?.preferences?.completedTransfer) ||
+    Boolean(form.notifications?.preferences?.failedTransfer);
   const uploadConfigInputRef = useRef(null);
 
   function resetSetupProgressUiState() {
@@ -420,6 +469,39 @@ export default function SetupPage({
     setBootstrap((current) => ({
       ...current,
       [field]: value
+    }));
+  }
+
+  function updateNotificationSmtp(field, value) {
+    setNotificationsNotice({ tone: 'pending', text: '' });
+    setForm((current) => ({
+      ...current,
+      notifications: {
+        ...current.notifications,
+        smtp: {
+          ...current.notifications.smtp,
+          [field]:
+            field === 'port'
+              ? value === ''
+                ? ''
+                : Number(value)
+              : value
+        }
+      }
+    }));
+  }
+
+  function updateNotificationPreference(field, value) {
+    setNotificationsNotice({ tone: 'pending', text: '' });
+    setForm((current) => ({
+      ...current,
+      notifications: {
+        ...current.notifications,
+        preferences: {
+          ...current.notifications.preferences,
+          [field]: Boolean(value)
+        }
+      }
     }));
   }
 
@@ -649,6 +731,60 @@ export default function SetupPage({
     } catch (error) {
       if (String(error?.name || '') === 'AbortError') return;
       setConfigNotice({ tone: 'error', text: `Download config failed: ${error.message}` });
+    }
+  }
+
+  async function handleSaveNotifications() {
+    try {
+      if (!hasAnyNotificationPreference) {
+        throw new Error('Select at least one notification type');
+      }
+      setNotificationsSaving(true);
+      setNotificationsNotice({ tone: 'pending', text: '' });
+      const result = await api.saveNotificationConfig(form.notifications);
+      setForm((current) => ({
+        ...current,
+        notifications: {
+          ...normalizeConfig({ notifications: result.notifications }).notifications
+        }
+      }));
+      setNotificationsNotice({ tone: 'success', text: 'Notification settings saved.' });
+    } catch (error) {
+      setNotificationsNotice({ tone: 'error', text: `Failed to save notifications: ${error.message}` });
+    } finally {
+      setNotificationsSaving(false);
+    }
+  }
+
+  async function handleSendTestNotificationEmail() {
+    try {
+      setNotificationsTesting(true);
+      setNotificationsNotice({ tone: 'pending', text: '' });
+      await api.testNotificationEmail(form.notifications.smtp);
+      setNotificationsNotice({ tone: 'success', text: 'Test email sent.' });
+    } catch (error) {
+      setNotificationsNotice({ tone: 'error', text: error.message });
+    } finally {
+      setNotificationsTesting(false);
+    }
+  }
+
+  async function handleClearNotificationConfig() {
+    try {
+      setNotificationsClearing(true);
+      setNotificationsNotice({ tone: 'pending', text: '' });
+      const result = await api.clearNotificationConfig();
+      setForm((current) => ({
+        ...current,
+        notifications: {
+          ...normalizeConfig({ notifications: result.notifications }).notifications
+        }
+      }));
+      setNotificationsNotice({ tone: 'success', text: 'Notification settings cleared.' });
+    } catch (error) {
+      setNotificationsNotice({ tone: 'error', text: `Failed to clear notifications: ${error.message}` });
+    } finally {
+      setNotificationsClearing(false);
     }
   }
 
@@ -1513,6 +1649,13 @@ export default function SetupPage({
             <Users size={18} weight="duotone" aria-hidden="true" />
             Users
           </button>
+          <button
+            className={activeTab === SETTINGS_TAB_KEYS.notifications ? 'nav-button active' : 'nav-button'}
+            onClick={() => setActiveTab(SETTINGS_TAB_KEYS.notifications)}
+          >
+            <BellRinging size={18} weight="duotone" aria-hidden="true" />
+            Notifications
+          </button>
         </section>
       ) : null}
       {globalMessage ? <p>{globalMessage}</p> : null}
@@ -1551,12 +1694,6 @@ export default function SetupPage({
               Location where sessions are run from. This can be a network share or a folder on your local machine.
             </p>
           </div>
-        </div>
-        <div className="result-banner pending setup-mac-note">
-          For Mac&apos;s, make sure SSH is enabled in System Settings -> General -> Sharing ->
-          Remote Login, as well as Wake for Network Access in General -> Energy.
-          To get the path of a folder, right click the folder while holding option, then select
-          "copy foldername as pathname".
         </div>
       </section>
 
@@ -1814,6 +1951,16 @@ export default function SetupPage({
           ) : null}
         </section>
         </section>
+        <div className="result-banner pending setup-mac-note">
+          It is highly advised to set static local IP&apos;s for any location you want to configure.
+          If a location&apos;s IP changes, it will break the config.
+        </div>
+        <div className="result-banner pending setup-mac-note">
+          For Mac&apos;s, make sure SSH is enabled in System Settings -> General -> Sharing ->
+          Remote Login, as well as Wake for Network Access in General -> Energy.
+          To get the path of a folder, right click the folder while holding option, then select
+          "copy foldername as pathname".
+        </div>
       </section>
 
       <section className="panel step-panel">
@@ -2127,6 +2274,153 @@ export default function SetupPage({
                   </li>
                 ))}
               </ul>
+            ) : null}
+          </section>
+        </section>
+        ) : null
+      ) : null}
+
+      {activeTab === SETTINGS_TAB_KEYS.notifications ? (
+        !wizardMode ? (
+        <section className="panel step-panel">
+          <div className="panel-header users-panel-header">
+            <div>
+              <h2 className="section-title-with-icon">
+                <BellRinging size={22} weight="duotone" aria-hidden="true" />
+                Notifications
+              </h2>
+              <p>Configure SMTP email alerts for transfer outcomes.</p>
+            </div>
+            <div className="button-row">
+              <button
+                className="setup-icon-button setup-icon-button-neutral setup-config-action-button"
+                onClick={handleSendTestNotificationEmail}
+                disabled={notificationsTesting || notificationsSaving || notificationsClearing}
+                title="Send Test Email"
+                aria-label="Send Test Email"
+              >
+                <span>{notificationsTesting ? 'Sending…' : 'Send Test Email'}</span>
+              </button>
+              <button
+                className="setup-icon-button setup-icon-button-danger"
+                onClick={handleClearNotificationConfig}
+                disabled={notificationsClearing || notificationsSaving || notificationsTesting}
+                title="Clear Notifications"
+                aria-label="Clear Notifications"
+              >
+                <IconTrash />
+              </button>
+              <button
+                className="setup-icon-button"
+                onClick={handleSaveNotifications}
+                disabled={notificationsSaving || notificationsClearing || notificationsTesting || !hasAnyNotificationPreference}
+                title="Save Notifications"
+                aria-label="Save Notifications"
+              >
+                <IconSave />
+              </button>
+            </div>
+          </div>
+
+          <section className="subpanel">
+            <h4>SMTP Configuration</h4>
+            <section className="grid two-col">
+              <label>
+                Host
+                <input
+                  type="text"
+                  value={form.notifications.smtp.host}
+                  onChange={(e) => updateNotificationSmtp('host', e.target.value)}
+                />
+              </label>
+              <div className="notification-port-secure-inline">
+                <label className="notification-port-field">
+                  Port
+                  <input
+                    type="number"
+                    value={form.notifications.smtp.port}
+                    onChange={(e) => updateNotificationSmtp('port', e.target.value)}
+                  />
+                </label>
+                <div className="notification-checkbox-row notification-secure-inline">
+                  <input
+                    id="notifications-smtp-secure"
+                    type="checkbox"
+                    checked={Boolean(form.notifications.smtp.secure)}
+                  onChange={(e) => updateNotificationSmtp('secure', e.target.checked)}
+                />
+                  <label htmlFor="notifications-smtp-secure" className="notification-checkbox-label">
+                    Use Secure SMTP (SSL)
+                  </label>
+                </div>
+              </div>
+            </section>
+            <section className="grid two-col" style={{ marginTop: 12 }}>
+              <label>
+                Username
+                <input
+                  type="text"
+                  value={form.notifications.smtp.username}
+                  onChange={(e) => updateNotificationSmtp('username', e.target.value)}
+                />
+              </label>
+              <label>
+                Password
+                <PasswordField
+                  value={form.notifications.smtp.password}
+                  onChange={(e) => updateNotificationSmtp('password', e.target.value)}
+                />
+              </label>
+            </section>
+            <section className="grid two-col" style={{ marginTop: 12 }}>
+              <label>
+                From Email
+                <input
+                  type="text"
+                  value={form.notifications.smtp.from}
+                  onChange={(e) => updateNotificationSmtp('from', e.target.value)}
+                />
+              </label>
+              <label>
+                To Email(s)
+                <input
+                  type="text"
+                  value={form.notifications.smtp.to}
+                  onChange={(e) => updateNotificationSmtp('to', e.target.value)}
+                  placeholder="name@example.com, team@example.com"
+                />
+              </label>
+            </section>
+          </section>
+
+          <section className="subpanel" style={{ marginTop: 12 }}>
+            <h4>Notify Me For:</h4>
+            <div className="notification-checkbox-row" style={{ marginTop: 0 }}>
+              <input
+                id="notifications-successful"
+                type="checkbox"
+                checked={Boolean(form.notifications.preferences.completedTransfer)}
+                onChange={(e) => updateNotificationPreference('completedTransfer', e.target.checked)}
+              />
+              <label htmlFor="notifications-successful" className="notification-checkbox-label">
+                Successful Transfers
+              </label>
+            </div>
+            <div className="notification-checkbox-row" style={{ marginTop: 10 }}>
+              <input
+                id="notifications-failed"
+                type="checkbox"
+                checked={Boolean(form.notifications.preferences.failedTransfer)}
+                onChange={(e) => updateNotificationPreference('failedTransfer', e.target.checked)}
+              />
+              <label htmlFor="notifications-failed" className="notification-checkbox-label">
+                Failed Transfers
+              </label>
+            </div>
+            {notificationsNotice.text ? (
+              <div className="notice-slot" style={{ marginBottom: 0 }}>
+                <ResultBanner tone={notificationsNotice.tone} text={notificationsNotice.text} />
+              </div>
             ) : null}
           </section>
         </section>

@@ -15,6 +15,12 @@ import {
 } from '../services/ssh.js';
 import { saveConfig, loadConfig } from '../services/configStore.js';
 import { adminGuard } from '../services/auth.js';
+import { sendTestNotificationEmail } from '../services/notifications.js';
+import {
+  loadNotificationConfig,
+  saveNotificationConfig,
+  clearNotificationConfig
+} from '../services/notificationConfigStore.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -59,8 +65,11 @@ function extractTargetPayload(body = {}) {
 }
 
 router.get('/config', async (req, res) => {
-  const config = await loadConfig();
-  res.json(config);
+  const [config, notifications] = await Promise.all([loadConfig(), loadNotificationConfig()]);
+  res.json({
+    ...config,
+    notifications
+  });
 });
 
 router.get('/key-status', async (req, res) => {
@@ -239,7 +248,7 @@ router.post('/peer-trust/working-to-storage', adminGuard, handleWorkingToStorage
 router.post('/config', adminGuard, async (req, res) => {
   try {
     const current = await loadConfig();
-    const { configName, ...incoming } = req.body || {};
+    const { configName, notifications: _ignoredNotifications, ...incoming } = req.body || {};
     const saved = await saveConfig({
       ...current,
       ...incoming
@@ -254,6 +263,33 @@ router.post('/config', adminGuard, async (req, res) => {
     res.json({ ok: true, config: saved, storedAs });
   } catch (error) {
     res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+router.post('/notifications/config', adminGuard, async (req, res) => {
+  try {
+    const notifications = await saveNotificationConfig(req.body?.notifications || {});
+    return res.json({ ok: true, notifications });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: `Notification save failed: ${error.message}` });
+  }
+});
+
+router.post('/notifications/clear', adminGuard, async (req, res) => {
+  try {
+    const notifications = await clearNotificationConfig();
+    return res.json({ ok: true, notifications });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: `Notification clear failed: ${error.message}` });
+  }
+});
+
+router.post('/notifications/test-email', adminGuard, async (req, res) => {
+  try {
+    await sendTestNotificationEmail(req.body?.smtp || {});
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: `Test email failed: ${error.message}` });
   }
 });
 

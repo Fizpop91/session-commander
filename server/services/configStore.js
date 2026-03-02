@@ -8,21 +8,27 @@ const defaultPath = path.resolve('server/config/defaultConfig.json');
 async function ensureDataDir() {
   await fs.mkdir(dataDir, { recursive: true });
 }
+function stripNotificationFields(config) {
+  const next = JSON.parse(JSON.stringify(config || {}));
+  delete next.notifications;
+  return next;
+}
 
 export async function loadConfig() {
   await ensureDataDir();
 
   try {
     const raw = await fs.readFile(configPath, 'utf8');
-    return JSON.parse(raw);
+    return stripNotificationFields(JSON.parse(raw));
   } catch {
     const defaults = await fs.readFile(defaultPath, 'utf8');
-    return JSON.parse(defaults);
+    return stripNotificationFields(JSON.parse(defaults));
   }
 }
 
 export async function saveConfig(nextConfig) {
   await ensureDataDir();
-  await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2), 'utf8');
-  return nextConfig;
+  const sanitized = stripNotificationFields(nextConfig);
+  await fs.writeFile(configPath, JSON.stringify(sanitized, null, 2), 'utf8');
+  return sanitized;
 }
