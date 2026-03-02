@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { buildSessionName } from '../services/naming.js';
 import { createFromTemplate, inspectTemplatePtx } from '../services/transfer.js';
+import { notifyTransferEvent } from '../services/notifications.js';
 
 const router = Router();
 
@@ -16,8 +17,21 @@ router.post('/preview-name', (req, res) => {
 router.post('/create', async (req, res) => {
   try {
     const result = await createFromTemplate(req.body);
+    void notifyTransferEvent({
+      transferType: 'template-create',
+      outcome: 'completed',
+      sourcePath: req.body?.templatePath,
+      destinationPath: result?.destinationPath
+    });
     res.json({ ok: true, ...result });
   } catch (error) {
+    void notifyTransferEvent({
+      transferType: 'template-create',
+      outcome: 'failed',
+      sourcePath: req.body?.templatePath,
+      destinationPath: req.body?.destinationParent,
+      error: error.message
+    });
     res.status(400).json({ ok: false, error: error.message });
   }
 });

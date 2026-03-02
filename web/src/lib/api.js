@@ -94,6 +94,12 @@ export const api = {
   getConfig: () => request('/setup/config'),
   saveConfig: (body, configName) =>
     request('/setup/config', { method: 'POST', body: JSON.stringify({ ...body, configName }) }),
+  saveNotificationConfig: (notifications) =>
+    request('/setup/notifications/config', { method: 'POST', body: JSON.stringify({ notifications }) }),
+  clearNotificationConfig: () =>
+    request('/setup/notifications/clear', { method: 'POST' }),
+  testNotificationEmail: (smtp) =>
+    request('/setup/notifications/test-email', { method: 'POST', body: JSON.stringify({ smtp }) }),
   listStoredConfigs: () => request('/setup/configs'),
   loadStoredConfig: (name) =>
     request('/setup/configs/load', { method: 'POST', body: JSON.stringify({ name }) }),
