@@ -1543,13 +1543,12 @@ export default function SetupPage({
         <div className="setup-intro">
           <div className="setup-intro-item">
             <span className="setup-label-tag">Storage Location</span>
-            <p>Your server or NAS where you store your backed up sessions.</p>
+            <p>Source of session backups and templates.</p>
           </div>
           <div className="setup-intro-item">
             <span className="setup-label-tag">Working Location</span>
             <p className="setup-working-line">
-              The location where you run your sessions from. This can be a network share or a
-              folder on your local machine.
+              Location where sessions are run from. This can be a network share or a folder on your local machine.
             </p>
           </div>
         </div>
