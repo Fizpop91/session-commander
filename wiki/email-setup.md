@@ -13,6 +13,8 @@ You can set:
 
 You can also send a test email from the Notifications tab, and clear notification config (including any stored SMTP password)
 
+![header](../screenshots/email-setup.png)
+
 **Storage and encryption details**
 
 - Notification settings are stored separately from setup config in `data/notifications.json`
@@ -20,3 +22,11 @@ You can also send a test email from the Notifications tab, and clear notificatio
 - The encryption key is loaded from `SESSION_COMMANDER_SECRET_KEY` (if set), or generated/stored at `data/secrets.key`
 
 Because notifications are in separate files, restoring a saved setup config does not automatically restore SMTP notification settings.
+
+**Email Examples**
+
+![header](../screenshots/email-backup-complete.png)
+
+![header](../screenshots/email-restore-complete.png)
+
+![header](../screenshots/email-new-session.png)

@@ -15,11 +15,11 @@ The Setup page prepares all `SSH` trust required for **Session Commander** to ru
 The container does not copy files through itself.
 Instead, it connects over `SSH` and tells one location to copy directly to the other location using `rsync` or `scp` as a backup. Because of that, `SSH` trust must exist in multiple directions.
 
-![header](screenshots/configuration_header.png)
+![header](../screenshots/configuration-header.png)
 
 **Step 1: Configure Targets**
 
-![header](screenshots/configuration-targets-pending.png)
+![header](../screenshots/configuration-targets.png)
 
 This step stores the connection details for both locations:
 
@@ -41,7 +41,7 @@ The saved config is written to data/config.json.
 <br>
 **Step 2: Authorize Container Access**
 
-![header](screenshots/configuration-auth-done.png)
+![header](../screenshots/configuration-auth-done.png)
 
 This is a one-click setup step that prepares the Docker container to log into both locations.
 
@@ -72,7 +72,7 @@ Container key comment (for identification/cleanup):
 <br>
 **Step 3: Enable Direct location-to-location Trust**
 
-![header](screenshots/configuration-trust-done.png)
+![header](../screenshots/configuration-trust-done.png)
 
 The app needs the locations to trust each other so one location can push files directly to the other.
 
