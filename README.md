@@ -25,10 +25,10 @@ Multiple naming schemes can also be saved if necessary.
 
 ---
 
-- [Docker Container Setup]()
+- [Docker Container Setup](https://github.com/Fizpop91/session-commander/blob/main/wiki/docker-container-setup.md)
 
-- [App Setup Process]()
+- [App Setup Process](https://github.com/Fizpop91/session-commander/blob/main/wiki/app-setup-process.md)
 
-- [Email Notifications]()
+- [Email Notifications](https://github.com/Fizpop91/session-commander/blob/main/wiki/email-setup.md)
 
-- [App Usage]()
+- [App Usage](https://github.com/Fizpop91/session-commander/blob/main/wiki/app-usage.md)
