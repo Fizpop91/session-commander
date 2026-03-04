@@ -38,6 +38,23 @@ function compactOutput(value) {
     .join(' | ');
 }
 
+function isConnectivityError(text) {
+  return /Connection (closed|refused)|No route to host|Operation timed out|Connection timed out|Could not resolve hostname|Name or service not known|Network is unreachable|Host key verification failed/i.test(
+    String(text || '')
+  );
+}
+
+function normalizeSshError(target, error, actionLabel = 'reach location') {
+  const details = `${error?.stderr || ''} ${error?.stdout || ''} ${error?.message || ''}`;
+  if (isConnectivityError(details)) {
+    const host = String(target?.host || '').trim() || 'the configured host';
+    return new Error(
+      `Could not detect location (${host}). Make sure it is online, reachable, and the host/IP and SSH port are correct.`
+    );
+  }
+  return new Error(`${actionLabel} failed: ${compactOutput(details) || error?.message || 'Unknown SSH error'}`);
+}
+
 async function primeHostKey(target) {
   const args = [
     '-p',
@@ -124,6 +141,10 @@ async function execPasswordSsh(target, password, remoteCommand, options = {}) {
 
   if (lastError) {
     const details = diagnostics.length ? ` (${diagnostics.join(' ; ')})` : '';
+    const normalized = normalizeSshError(target, lastError, 'Password SSH');
+    if (isConnectivityError(`${lastError?.stderr || ''} ${lastError?.message || ''}`)) {
+      throw normalized;
+    }
     throw new Error(`Password SSH failed${details}: ${lastError.message}`);
   }
 
@@ -188,42 +209,48 @@ export async function getContainerKeyStatus() {
 }
 
 export async function testNasConnection(target) {
-  const { stdout } = await execFileAsync('ssh', [...baseSshArgs(target), 'echo connected']);
-
-  return { message: stdout.trim() };
+  try {
+    const { stdout } = await execFileAsync('ssh', [...baseSshArgs(target), 'echo connected']);
+    return { message: stdout.trim() };
+  } catch (error) {
+    throw normalizeSshError(target, error, 'Connection test');
+  }
 }
 
 export async function checkScpInstalled(target) {
-  const { stdout } = await execFileAsync('ssh', [
-    ...baseSshArgs(target),
-    'command -v scp || true'
-  ]);
-
-  return {
-    installed: Boolean(stdout.trim()),
-    path: stdout.trim() || null
-  };
+  try {
+    const { stdout } = await execFileAsync('ssh', [...baseSshArgs(target), 'command -v scp || true']);
+    return {
+      installed: Boolean(stdout.trim()),
+      path: stdout.trim() || null
+    };
+  } catch (error) {
+    throw normalizeSshError(target, error, 'SCP check');
+  }
 }
 
 export async function checkRsyncInstalled(target) {
-  const { stdout } = await execFileAsync('ssh', [
-    ...baseSshArgs(target),
-    'command -v rsync || true'
-  ]);
-
-  return {
-    installed: Boolean(stdout.trim()),
-    path: stdout.trim() || null
-  };
+  try {
+    const { stdout } = await execFileAsync('ssh', [...baseSshArgs(target), 'command -v rsync || true']);
+    return {
+      installed: Boolean(stdout.trim()),
+      path: stdout.trim() || null
+    };
+  } catch (error) {
+    throw normalizeSshError(target, error, 'Rsync check');
+  }
 }
 
 export async function runRemoteCommand(target, command) {
-  const { stdout, stderr } = await execFileAsync('ssh', [...baseSshArgs(target), command]);
-
-  return {
-    stdout: stdout.trim(),
-    stderr: stderr.trim()
-  };
+  try {
+    const { stdout, stderr } = await execFileAsync('ssh', [...baseSshArgs(target), command]);
+    return {
+      stdout: stdout.trim(),
+      stderr: stderr.trim()
+    };
+  } catch (error) {
+    throw normalizeSshError(target, error, 'Remote command');
+  }
 }
 
 export async function installContainerKeyWithPassword(target, password) {
@@ -654,6 +681,57 @@ export async function clearToolKeysWithPasswords({
       working: workingState
     }
   };
+}
+
+export async function removeWorkingLocationKeysWithPasswords({
+  storageTarget,
+  storagePassword,
+  workingTarget,
+  workingPassword
+}) {
+  const warnings = [];
+
+  let containerKey = '';
+  try {
+    containerKey = await getContainerPublicKey();
+  } catch {
+    containerKey = '';
+  }
+
+  const [storagePeerKey, workingPeerKey] = await Promise.all([
+    readRemotePeerPublicKeyWithPassword(storageTarget, storagePassword),
+    readRemotePeerPublicKeyWithPassword(workingTarget, workingPassword)
+  ]);
+
+  try {
+    await execPasswordSsh(
+      storageTarget,
+      storagePassword,
+      [
+        removeLineFromAuthorizedKeysCommand(workingPeerKey)
+      ].join('\n')
+    );
+  } catch (error) {
+    warnings.push(`storage cleanup: ${error.message}`);
+  }
+
+  try {
+    await execPasswordSsh(
+      workingTarget,
+      workingPassword,
+      [
+        removePatternFromAuthorizedKeysCommand(containerKeyComment),
+        removePatternFromAuthorizedKeysCommand(peerKeyComment),
+        removeLineFromAuthorizedKeysCommand(containerKey),
+        removeLineFromAuthorizedKeysCommand(storagePeerKey),
+        'rm -f ~/.ssh/ptsh_peer_ed25519 ~/.ssh/ptsh_peer_ed25519.pub'
+      ].join('\n')
+    );
+  } catch (error) {
+    warnings.push(`working cleanup: ${error.message}`);
+  }
+
+  return { ok: true, warnings };
 }
 
 export async function refreshContainerKnownHosts({ storageTarget, workingTargets = [] }) {

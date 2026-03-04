@@ -11,7 +11,8 @@ import {
   getContainerKeyStatus,
   testConnectionWithPassword,
   refreshContainerKnownHosts,
-  clearToolKeysWithPasswords
+  clearToolKeysWithPasswords,
+  removeWorkingLocationKeysWithPasswords
 } from '../services/ssh.js';
 import { saveConfig, loadConfig } from '../services/configStore.js';
 import { adminGuard } from '../services/auth.js';
@@ -420,6 +421,36 @@ router.post('/clear-container-known-hosts', adminGuard, async (req, res) => {
     const result = await refreshContainerKnownHosts({
       workingTargets: hosts.map((host) => ({ host }))
     });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+router.post('/remove-working-location-keys', adminGuard, async (req, res) => {
+  try {
+    const { storageTarget, storagePassword, workingTarget, workingPassword } = extractTargetPayload(req.body);
+
+    if (!storageTarget?.host || !storageTarget?.username) {
+      return res.status(400).json({ ok: false, error: 'Storage location target is required' });
+    }
+    if (!workingTarget?.host || !workingTarget?.username) {
+      return res.status(400).json({ ok: false, error: 'Working location target is required' });
+    }
+    if (!storagePassword) {
+      return res.status(400).json({ ok: false, error: 'Storage location password is required' });
+    }
+    if (!workingPassword) {
+      return res.status(400).json({ ok: false, error: 'Working location password is required' });
+    }
+
+    const result = await removeWorkingLocationKeysWithPasswords({
+      storageTarget,
+      storagePassword,
+      workingTarget,
+      workingPassword
+    });
+
     return res.json({ ok: true, ...result });
   } catch (error) {
     return res.status(400).json({ ok: false, error: error.message });

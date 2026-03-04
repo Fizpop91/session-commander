@@ -120,10 +120,13 @@ export const api = {
     request('/setup/clear-config', { method: 'POST', body: JSON.stringify(body) }),
   clearSetupConfigAndKeys: (body) =>
     request('/setup/clear-config-and-keys', { method: 'POST', body: JSON.stringify(body) }),
+  removeWorkingLocationKeys: (body) =>
+    request('/setup/remove-working-location-keys', { method: 'POST', body: JSON.stringify(body) }),
   clearSetupContainerKnownHosts: (body) =>
     request('/setup/clear-container-known-hosts', { method: 'POST', body: JSON.stringify(body) }),
 
   listDirectory: (body) => request('/browse/list', { method: 'POST', body: JSON.stringify(body) }),
+  deleteBrowsePath: (body) => request('/browse/delete', { method: 'POST', body: JSON.stringify(body) }),
   compareTransfer: (body) =>
     request('/transfer/compare', { method: 'POST', body: JSON.stringify(body) }),
   restore: (body) => request('/transfer/restore', { method: 'POST', body: JSON.stringify(body) }),

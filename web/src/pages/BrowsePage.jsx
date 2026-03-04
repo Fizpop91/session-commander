@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowsClockwise, CaretCircleLeft, File, FolderSimple } from '@phosphor-icons/react';
+import { ArrowClockwise, ArrowCounterClockwise, ArrowFatLineLeft, ArrowFatLineRight, ArrowsClockwise, CaretCircleLeft, Database, DesktopTower, File, FolderSimple, Repeat, Trash, XCircle } from '@phosphor-icons/react';
 import { api } from '../lib/api.js';
 
 const defaultConfig = {
@@ -7,7 +7,8 @@ const defaultConfig = {
     host: '',
     port: 22,
     username: '',
-    rootPath: '/var/nfs/shared/Sessions'
+    rootPath: '',
+    allowDeleteInBrowser: false
   },
   workingLocations: [
     {
@@ -16,7 +17,8 @@ const defaultConfig = {
       host: '',
       port: 22,
       username: '',
-      rootPath: '/mnt/media',
+      rootPath: '',
+      allowDeleteInBrowser: false,
       isPrimary: true,
       setupState: {
         containerAuthorized: false,
@@ -35,7 +37,8 @@ function normalizeConfig(config) {
     host: config?.storageLocation?.host || '',
     port: Number(config?.storageLocation?.port || 22),
     username: config?.storageLocation?.username || '',
-    rootPath: config?.storageLocation?.rootPath || '/var/nfs/shared/Sessions'
+    rootPath: config?.storageLocation?.rootPath || '',
+    allowDeleteInBrowser: Boolean(config?.storageLocation?.allowDeleteInBrowser)
   };
 
   let workingLocations =
@@ -46,7 +49,8 @@ function normalizeConfig(config) {
           host: drive.host || '',
           port: Number(drive.port || 22),
           username: drive.username || '',
-          rootPath: drive.rootPath || '/mnt/media',
+          rootPath: drive.rootPath || '',
+          allowDeleteInBrowser: Boolean(drive?.allowDeleteInBrowser),
           isPrimary: Boolean(drive.isPrimary),
           setupState: {
             containerAuthorized: Boolean(drive?.setupState?.containerAuthorized),
@@ -80,20 +84,14 @@ function hasConfiguredTarget(target) {
   return Boolean(target?.host?.trim() && target?.username?.trim() && target?.rootPath?.trim());
 }
 
-function isSetupComplete(config, selectedWorkingLocationId) {
-  const storageReady = hasConfiguredTarget(config?.storageLocation);
-  const working =
-    config?.workingLocations?.find((drive) => drive.id === selectedWorkingLocationId) ||
-    config?.workingLocations?.[0] ||
-    null;
-  const workingReady = hasConfiguredTarget(working);
-  const setupState = working?.setupState || {};
-  const trustReady =
+function isWorkingLocationReadyForBrowse(location) {
+  if (!hasConfiguredTarget(location)) return false;
+  const setupState = location?.setupState || {};
+  return (
     Boolean(setupState.containerAuthorized) &&
     Boolean(setupState.storageToWorking) &&
-    Boolean(setupState.workingToStorage);
-
-  return storageReady && workingReady && trustReady;
+    Boolean(setupState.workingToStorage)
+  );
 }
 
 function joinRemotePath(basePath, name) {
@@ -212,7 +210,15 @@ function formatTransferDestination(destinationPath) {
   if (!parts.length) return '/';
   if (parts.length === 1) return toTitleCase(parts[0]);
 
-  const shareName = toTitleCase(parts[parts.length - 2]);
+  let sharePart = parts[parts.length - 2];
+  if (sharePart === '.data') {
+    const dataIndex = parts.lastIndexOf('.data');
+    if (dataIndex > 0) {
+      sharePart = parts[dataIndex - 1];
+    }
+  }
+
+  const shareName = toTitleCase(sharePart);
   const sessionName = parts[parts.length - 1];
 
   return `${shareName} / ${sessionName}`;
@@ -262,6 +268,18 @@ function validateTargetForBrowse(target, side) {
   if (!target?.username?.trim()) {
     throw new Error(`${side === 'storage' ? 'Storage location' : 'Working location'} username is not configured. Ask an admin to complete setup.`);
   }
+}
+
+function humanizeLocationErrorMessage(rawMessage) {
+  const text = String(rawMessage || '');
+  if (
+    /Connection (closed|refused)|No route to host|Operation timed out|Connection timed out|Could not resolve hostname|Network is unreachable/i.test(
+      text
+    )
+  ) {
+    return 'Could not detect location. Make sure it is online, reachable, and the host/IP and SSH settings are correct.';
+  }
+  return text;
 }
 
 function saveActiveTransfer(activeTransfer) {
@@ -345,6 +363,13 @@ export default function BrowsePage() {
   const transferDetailsRef = useRef(null);
   const [pendingCompareScroll, setPendingCompareScroll] = useState(false);
   const [pendingTransferScroll, setPendingTransferScroll] = useState(false);
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState({
+    open: false,
+    side: '',
+    name: '',
+    path: '',
+    locationLabel: ''
+  });
 
   const currentWorkingLocation = useMemo(() => {
     return (
@@ -353,10 +378,19 @@ export default function BrowsePage() {
       null
     );
   }, [config.workingLocations, selectedWorkingLocationId]);
-  const setupComplete = useMemo(
-    () => isSetupComplete(config, selectedWorkingLocationId),
-    [config, selectedWorkingLocationId]
+  const storageConfigured = useMemo(
+    () => hasConfiguredTarget(config.storageLocation),
+    [config.storageLocation]
   );
+  const selectedWorkingConfigured = useMemo(
+    () => hasConfiguredTarget(currentWorkingLocation),
+    [currentWorkingLocation]
+  );
+  const selectedWorkingReady = useMemo(
+    () => isWorkingLocationReadyForBrowse(currentWorkingLocation),
+    [currentWorkingLocation]
+  );
+  const canRunTransfers = storageConfigured && selectedWorkingReady;
 
   useEffect(() => {
     let active = true;
@@ -377,38 +411,53 @@ export default function BrowsePage() {
 
         const initialPaths = {
           storage: normalized.storageLocation.rootPath,
-          working: initialWorkingLocation?.rootPath || '/mnt/media'
+          working: initialWorkingLocation?.rootPath || ''
         };
 
         setPaths(initialPaths);
 
-        if (!isSetupComplete(normalized, normalized.selectedWorkingLocationId)) {
-          setNotice({
-            tone: 'pending',
-            text: 'Configuration must be completed first. Go to Settings and complete all 3 setup steps to continue.'
-          });
-          return;
-        }
+        const storageReady = hasConfiguredTarget(normalized.storageLocation);
+        const initialWorkingReady = isWorkingLocationReadyForBrowse(initialWorkingLocation);
 
-        await Promise.all([
-          loadLocationDirectory(
+        if (storageReady) {
+          await loadLocationDirectory(
             'storage',
             initialPaths.storage,
             normalized,
             normalized.selectedWorkingLocationId
-          ),
-          loadLocationDirectory(
+          );
+        } else {
+          setEntries((current) => ({ ...current, storage: [] }));
+        }
+
+        if (initialWorkingReady) {
+          await loadLocationDirectory(
             'working',
             initialPaths.working,
             normalized,
             normalized.selectedWorkingLocationId
-          )
-        ]);
+          );
+        } else {
+          setEntries((current) => ({ ...current, working: [] }));
+          setSelected((current) => ({ ...current, working: null }));
+        }
+
+        if (!storageReady) {
+          setNotice({
+            tone: 'pending',
+            text: 'Locations are not configured yet. Complete setup in Settings to browse and run transfers.'
+          });
+        } else if (!initialWorkingReady) {
+          setNotice({
+            tone: 'pending',
+            text: 'Locations are not configured yet. Complete setup in Settings to browse and run transfers.'
+          });
+        }
       } catch (error) {
         if (!active) return;
         setNotice({
           tone: 'error',
-          text: `Failed to load Browse page: ${error.message}`
+          text: `Failed to load Browse page: ${humanizeLocationErrorMessage(error.message)}`
         });
       } finally {
         if (active) setLoadingConfig(false);
@@ -455,15 +504,28 @@ export default function BrowsePage() {
   }, [activeTransfer?.jobId]);
 
   useEffect(() => {
-    if (loadingConfig || !currentWorkingLocation || !setupComplete) return;
+    if (loadingConfig || !currentWorkingLocation) return;
 
     setPaths((current) => ({
       ...current,
       working: currentWorkingLocation.rootPath
     }));
 
-    loadLocationDirectory('working', currentWorkingLocation.rootPath, undefined, currentWorkingLocation.id);
-  }, [loadingConfig, currentWorkingLocation?.id, setupComplete]);
+    setSelected((current) => ({ ...current, working: null }));
+    setCompareState({
+      type: null,
+      source: null,
+      destination: null,
+      destinationPath: '',
+      result: null
+    });
+
+    if (isWorkingLocationReadyForBrowse(currentWorkingLocation)) {
+      loadLocationDirectory('working', currentWorkingLocation.rootPath, undefined, currentWorkingLocation.id);
+    } else {
+      setEntries((current) => ({ ...current, working: [] }));
+    }
+  }, [loadingConfig, currentWorkingLocation?.id]);
 
   useEffect(() => {
     if (!pendingCompareScroll || !compareState.result) return;
@@ -552,7 +614,7 @@ export default function BrowsePage() {
         setActiveTransfer(null);
         setNotice({
           tone: 'error',
-          text: `Progress update failed: ${error.message}`
+          text: `Progress update failed: ${humanizeLocationErrorMessage(error.message)}`
         });
       }
     }
@@ -588,7 +650,7 @@ export default function BrowsePage() {
       explicitPath ||
       (side === 'storage'
         ? activeConfig.storageLocation.rootPath
-        : target?.rootPath || '/mnt/media');
+        : target?.rootPath || '');
 
     if (!target) return;
 
@@ -631,7 +693,7 @@ export default function BrowsePage() {
         tone: 'error',
         text: `Failed to load ${
           side === 'storage' ? 'Storage Location' : target.name || 'Working Location'
-        } directory: ${error.message}`
+        } directory: ${humanizeLocationErrorMessage(error.message)}`
       });
 
       setEntries((current) => ({
@@ -682,7 +744,7 @@ export default function BrowsePage() {
     const rootPath =
       side === 'storage'
         ? config.storageLocation.rootPath
-        : currentWorkingLocation?.rootPath || '/mnt/media';
+        : currentWorkingLocation?.rootPath || '';
 
     const nextPath = getParentPath(paths[side], rootPath);
     await loadLocationDirectory(side, nextPath, undefined, selectedWorkingLocationId);
@@ -692,13 +754,81 @@ export default function BrowsePage() {
     const rootPath =
       side === 'storage'
         ? config.storageLocation.rootPath
-        : currentWorkingLocation?.rootPath || '/mnt/media';
+        : currentWorkingLocation?.rootPath || '';
 
     await loadLocationDirectory(side, rootPath, undefined, selectedWorkingLocationId);
   }
 
+  async function handleDeleteSelected(side) {
+    const selectedEntry = selected[side];
+    if (!selectedEntry?.path) return;
+
+    const locationLabel =
+      side === 'storage' ? 'Storage Location' : currentWorkingLocation?.name || 'Working Location';
+    setDeleteConfirmModal({
+      open: true,
+      side,
+      name: selectedEntry.name,
+      path: selectedEntry.path,
+      locationLabel
+    });
+  }
+
+  async function handleConfirmDeleteSelected() {
+    const side = deleteConfirmModal.side;
+    const selectedPath = deleteConfirmModal.path;
+    const selectedName = deleteConfirmModal.name;
+    if (!side || !selectedPath) return;
+
+    const target = side === 'storage' ? config.storageLocation : currentWorkingLocation;
+    if (!target) return;
+
+    try {
+      await api.deleteBrowsePath({
+        target: {
+          host: target.host,
+          port: target.port,
+          username: target.username
+        },
+        path: selectedPath,
+        side,
+        workingLocationId: side === 'working' ? currentWorkingLocation?.id : undefined
+      });
+
+      setNotice({
+        tone: 'success',
+        text: `Deleted "${selectedName}" from ${deleteConfirmModal.locationLabel}.`
+      });
+
+      setCompareState({
+        type: null,
+        source: null,
+        destination: null,
+        destinationPath: '',
+        result: null
+      });
+
+      await loadLocationDirectory(side, paths[side], undefined, selectedWorkingLocationId);
+      setDeleteConfirmModal({
+        open: false,
+        side: '',
+        name: '',
+        path: '',
+        locationLabel: ''
+      });
+    } catch (error) {
+      setNotice({
+        tone: 'error',
+        text: `Delete failed: ${humanizeLocationErrorMessage(error.message)}`
+      });
+    }
+  }
+
   async function handleCompareTransfer(type) {
     try {
+      if (!canRunTransfers) {
+        throw new Error('Storage and selected Working Location must both be fully configured first');
+      }
       setComparingType(type);
       setNotice((current) => ({ ...current, text: '' }));
       setTransferLogs(null);
@@ -752,7 +882,7 @@ export default function BrowsePage() {
     } catch (error) {
       setNotice({
         tone: 'error',
-        text: `Compare failed: ${error.message}`
+        text: `Compare failed: ${humanizeLocationErrorMessage(error.message)}`
       });
 
       setCompareState({
@@ -769,6 +899,9 @@ export default function BrowsePage() {
 
   async function handleStartTransfer(existingMode) {
     try {
+      if (!canRunTransfers) {
+        throw new Error('Storage and selected Working Location must both be fully configured first');
+      }
       if (!compareState.type || !compareState.result) {
         throw new Error('Run compare first');
       }
@@ -863,7 +996,7 @@ export default function BrowsePage() {
     } catch (error) {
       setNotice({
         tone: 'error',
-        text: `Transfer failed: ${error.message}`
+        text: `Transfer failed: ${humanizeLocationErrorMessage(error.message)}`
       });
     }
   }
@@ -879,6 +1012,8 @@ export default function BrowsePage() {
   );
 
   const transferRunning = Boolean(activeTransfer?.jobId);
+  const restoreSelectionReady = Boolean(selected.storage && selected.storage.kind === 'directory');
+  const backupSelectionReady = Boolean(selected.working && selected.working.kind === 'directory');
   const compareFreshness = compareState.result ? getFreshnessFlags(compareState.result) : null;
   const destinationIsNewerWarning = Boolean(
     compareState.result?.source?.exists &&
@@ -896,67 +1031,66 @@ export default function BrowsePage() {
     );
   }
 
-  if (!setupComplete) {
-    return (
-      <section className="content">
-        <section className="panel step-panel">
-          <div className="result-banner pending">
-            Configuration must be completed first. Go to Settings and complete all 3 setup steps to
-            continue.
-          </div>
-        </section>
-      </section>
-    );
-  }
-
   return (
     <section className="content">
       <section className="panel hero-panel">
         <div className="panel-header">
           <div>
-            <h2>Restore / Backup Session</h2>
+            <h2 className="section-title-with-icon">
+              <Repeat size={22} weight="duotone" aria-hidden="true" />
+              Restore | Backup Session
+            </h2>
             <p>Select a folder to restore or backup, compare the destination, then run the transfer.</p>
           </div>
         </div>
 
       </section>
 
-      <section className="panel step-panel">
+      <section className="panel step-panel transfer-actions-panel">
         <div className="panel-header">
           <div>
-            <h3>Transfer Actions</h3>
+            <h3 className="pane-title-with-icon">
+              <Repeat size={18} weight="duotone" aria-hidden="true" />
+              <span>Transfer Actions</span>
+            </h3>
             <p>Choose a source folder, compare the destination, then decide whether to replace or skip.</p>
           </div>
         </div>
 
         {notice.text ? (
-          <div className="notice-slot">
+          <div className="notice-slot transfer-actions-notice-slot">
             <div className={`result-banner ${notice.tone}`}>{notice.text}</div>
           </div>
         ) : null}
 
         <section className="grid two-col">
-          <div className="subpanel">
-            <h4>Restore (Storage → {currentWorkingLocation?.name || 'Working'})</h4>
+          <div className="subpanel compare-action-card">
+            <h4 className="pane-title-with-icon">
+              <ArrowClockwise size={16} weight="duotone" aria-hidden="true" />
+              <span>Restore (Storage → {currentWorkingLocation?.name || 'Working'})</span>
+            </h4>
             <p>Destination folder will be created in the current Working Location location.</p>
             <button
               className="button-primary"
               onClick={() => handleCompareTransfer('restore')}
-              disabled={!canRestore || Boolean(comparingType) || transferRunning}
+              disabled={!canRestore || !canRunTransfers || Boolean(comparingType) || transferRunning}
             >
-              {comparingType === 'restore' ? 'Comparing…' : 'Compare Restore'}
+              {comparingType === 'restore' ? 'Comparing…' : 'Compare'}
             </button>
           </div>
 
-          <div className="subpanel">
-            <h4>Backup ({currentWorkingLocation?.name || 'Working'} → Storage)</h4>
+          <div className="subpanel compare-action-card">
+            <h4 className="pane-title-with-icon">
+              <ArrowCounterClockwise size={16} weight="duotone" aria-hidden="true" />
+              <span>Backup ({currentWorkingLocation?.name || 'Working'} → Storage)</span>
+            </h4>
             <p>Destination folder will be created in the current Storage Location location.</p>
             <button
               className="button-primary"
               onClick={() => handleCompareTransfer('backup')}
-              disabled={!canBackup || Boolean(comparingType) || transferRunning}
+              disabled={!canBackup || !canRunTransfers || Boolean(comparingType) || transferRunning}
             >
-              {comparingType === 'backup' ? 'Comparing…' : 'Compare Backup'}
+              {comparingType === 'backup' ? 'Comparing…' : 'Compare'}
             </button>
           </div>
         </section>
@@ -975,7 +1109,7 @@ export default function BrowsePage() {
                 compareState.source?.item?.path,
                 compareState.source?.side === 'storage'
                   ? config.storageLocation.rootPath
-                  : currentWorkingLocation?.rootPath || '/mnt/media'
+                  : currentWorkingLocation?.rootPath || ''
               )}
             </p>
             <p>
@@ -984,7 +1118,7 @@ export default function BrowsePage() {
                 compareState.destinationPath,
                 compareState.destination?.side === 'storage'
                   ? config.storageLocation.rootPath
-                  : currentWorkingLocation?.rootPath || '/mnt/media'
+                  : currentWorkingLocation?.rootPath || ''
               )}
             </p>
 
@@ -1110,55 +1244,173 @@ export default function BrowsePage() {
         ) : null}
       </section>
 
-      <section className="grid two-col">
-        <BrowserPane
-          title="Storage Location"
-          currentPath={paths.storage}
-          rootPath={config.storageLocation.rootPath}
-          entries={entries.storage}
-          selectedItem={selected.storage}
-          loading={loading.storage}
-          onRefresh={() =>
-            loadLocationDirectory('storage', paths.storage, undefined, selectedWorkingLocationId)
-          }
-          onBack={() => handleBackOneLevel('storage')}
-          onRoot={() => handleGoToLocationRoot('storage')}
-          onSelect={(entry) => handleSelectEntry('storage', entry)}
-          onOpenFromEntry={(entry) => handleOpenEntry('storage', entry)}
-          searchable
-        />
+      <section className="grid two-col location-panes-row browse-locations-grid">
+        {storageConfigured ? (
+          <BrowserPane
+            title={
+              <span className="pane-title-with-icon pane-title-static">
+                <Database size={18} weight="duotone" aria-hidden="true" />
+                <span>Storage Location</span>
+              </span>
+            }
+            currentPath={paths.storage}
+            rootPath={config.storageLocation.rootPath}
+            entries={entries.storage}
+            selectedItem={selected.storage}
+            loading={loading.storage}
+            onRefresh={() =>
+              loadLocationDirectory('storage', paths.storage, undefined, selectedWorkingLocationId)
+            }
+            onBack={() => handleBackOneLevel('storage')}
+            onDeleteSelected={() => handleDeleteSelected('storage')}
+            onRoot={() => handleGoToLocationRoot('storage')}
+            onSelect={(entry) => handleSelectEntry('storage', entry)}
+            onOpenFromEntry={(entry) => handleOpenEntry('storage', entry)}
+            canDelete={Boolean(config.storageLocation.allowDeleteInBrowser)}
+            deleteDisabled={loading.storage || !selected.storage}
+            searchable
+          />
+        ) : (
+          <section className="panel step-panel location-unconfigured-card">
+            <div className="panel-header pane-header-align-top">
+              <div className="pane-header-title">
+                <h3 className="pane-title-with-icon pane-title-static">
+                  <Database size={18} weight="duotone" aria-hidden="true" />
+                  <span>Storage Location</span>
+                </h3>
+              </div>
+            </div>
+            <div className="result-banner pending">
+              This Storage Location is not configured yet. Complete setup in Settings to browse this location.
+            </div>
+          </section>
+        )}
 
-        <BrowserPane
-          title={
-            <select
-              className="pane-title-select"
-              value={selectedWorkingLocationId || ''}
-              onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
-              disabled={transferRunning}
-            >
-              {config.workingLocations.map((drive) => (
-                <option key={drive.id} value={drive.id}>
-                  {drive.name}
-                  {drive.isPrimary ? ' (Primary)' : ''}
-                </option>
-              ))}
-            </select>
-          }
-          currentPath={paths.working}
-          rootPath={currentWorkingLocation?.rootPath || '/mnt/media'}
-          entries={entries.working}
-          selectedItem={selected.working}
-          loading={loading.working}
-          onRefresh={() =>
-            loadLocationDirectory('working', paths.working, undefined, selectedWorkingLocationId)
-          }
-          onBack={() => handleBackOneLevel('working')}
-          onRoot={() => handleGoToLocationRoot('working')}
-          onSelect={(entry) => handleSelectEntry('working', entry)}
-          onOpenFromEntry={(entry) => handleOpenEntry('working', entry)}
-          searchable
-        />
+        <div className="location-panes-arrow-stack" aria-hidden="true">
+          <div className={`location-arrow-tile${restoreSelectionReady ? ' active' : ''}`}>
+            <ArrowFatLineRight size={22} weight="duotone" />
+          </div>
+          <div className={`location-arrow-tile${backupSelectionReady ? ' active' : ''}`}>
+            <ArrowFatLineLeft size={22} weight="duotone" />
+          </div>
+        </div>
+
+        {selectedWorkingReady ? (
+          <BrowserPane
+            title={
+              <span className="pane-title-with-icon pane-title-with-select">
+                <DesktopTower size={18} weight="duotone" aria-hidden="true" />
+                <select
+                  className="pane-title-select"
+                  value={selectedWorkingLocationId || ''}
+                  onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
+                  disabled={transferRunning}
+                >
+                  {config.workingLocations.map((drive) => (
+                    <option key={drive.id} value={drive.id}>
+                      {drive.name}
+                      {drive.isPrimary ? ' (Primary)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            }
+            currentPath={paths.working}
+            rootPath={currentWorkingLocation?.rootPath || ''}
+            entries={entries.working}
+            selectedItem={selected.working}
+            loading={loading.working}
+            onRefresh={() =>
+              loadLocationDirectory('working', paths.working, undefined, selectedWorkingLocationId)
+            }
+            onBack={() => handleBackOneLevel('working')}
+            onDeleteSelected={() => handleDeleteSelected('working')}
+            onRoot={() => handleGoToLocationRoot('working')}
+            onSelect={(entry) => handleSelectEntry('working', entry)}
+            onOpenFromEntry={(entry) => handleOpenEntry('working', entry)}
+            canDelete={Boolean(currentWorkingLocation?.allowDeleteInBrowser)}
+            deleteDisabled={loading.working || !selected.working}
+            searchable
+          />
+        ) : (
+          <section className="panel step-panel location-unconfigured-card">
+            <div className="panel-header pane-header-align-top">
+              <div className="pane-header-title">
+                <span className="pane-title-with-icon pane-title-with-select">
+                  <DesktopTower size={18} weight="duotone" aria-hidden="true" />
+                  <select
+                    className="pane-title-select"
+                    value={selectedWorkingLocationId || ''}
+                    onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
+                    disabled={transferRunning}
+                  >
+                    {config.workingLocations.map((drive) => (
+                      <option key={drive.id} value={drive.id}>
+                        {drive.name}
+                        {drive.isPrimary ? ' (Primary)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </div>
+            </div>
+            <div className="result-banner pending">
+              {selectedWorkingConfigured
+                ? 'This Working Location is not fully set up yet. Complete authorization and trust steps in Settings.'
+                : 'This Working Location is not configured yet. Complete setup in Settings to browse this location.'}
+            </div>
+          </section>
+        )}
       </section>
+
+      {deleteConfirmModal.open ? (
+        <div
+          className="scheme-modal-backdrop"
+          onClick={() =>
+            setDeleteConfirmModal({
+              open: false,
+              side: '',
+              name: '',
+              path: '',
+              locationLabel: ''
+            })
+          }
+        >
+          <section className="scheme-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h4>Delete Item</h4>
+              <button
+                className="setup-icon-button setup-icon-button-danger"
+                onClick={() =>
+                  setDeleteConfirmModal({
+                    open: false,
+                    side: '',
+                    name: '',
+                    path: '',
+                    locationLabel: ''
+                  })
+                }
+                title="Close"
+                aria-label="Close"
+              >
+                <XCircle size={20} weight="duotone" aria-hidden="true" />
+              </button>
+            </div>
+            <p>
+              Delete <strong>"{deleteConfirmModal.name}"</strong> from{' '}
+              <strong>{deleteConfirmModal.locationLabel}</strong>?
+            </p>
+            <p className="muted-line" style={{ marginTop: 8 }}>
+              This action cannot be undone.
+            </p>
+            <div className="button-row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+              <button className="clear-with-keys-button" onClick={handleConfirmDeleteSelected}>
+                Delete
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1172,10 +1424,13 @@ function BrowserPane({
   loading,
   onRefresh,
   onBack,
+  onDeleteSelected,
   onRoot,
   onSelect,
   onOpenFromEntry,
-  searchable = false
+  searchable = false,
+  canDelete = false,
+  deleteDisabled = false
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -1200,6 +1455,17 @@ function BrowserPane({
           >
             <CaretCircleLeft size={20} weight="duotone" aria-hidden="true" />
           </button>
+          {canDelete ? (
+            <button
+              className="pane-action-button pane-action-danger"
+              onClick={onDeleteSelected}
+              disabled={deleteDisabled}
+              title="Delete Selected"
+              aria-label="Delete Selected"
+            >
+              <Trash size={18} weight="duotone" aria-hidden="true" />
+            </button>
+          ) : null}
           <button
             className="pane-action-button"
             onClick={onRoot}
@@ -1274,7 +1540,7 @@ function EntryList({ entries, selectedEntry, onSelect, onOpenFromEntry, emptyTex
     return <p>{emptyText}</p>;
   }
 
-  const hasOverflow = entries.length > 10;
+  const hasOverflow = entries.length > 5;
 
   return (
     <div className={hasOverflow ? 'entry-list-container has-overflow' : 'entry-list-container'}>

@@ -21,7 +21,10 @@ router.post('/create', async (req, res) => {
       transferType: 'template-create',
       outcome: 'completed',
       sourcePath: req.body?.templatePath,
-      destinationPath: result?.destinationPath
+      destinationPath: result?.destinationPath,
+      sourceTarget: req.body?.storageTarget,
+      destinationTarget: req.body?.workingTarget,
+      sessionName: result?.sessionName
     });
     res.json({ ok: true, ...result });
   } catch (error) {
@@ -30,6 +33,9 @@ router.post('/create', async (req, res) => {
       outcome: 'failed',
       sourcePath: req.body?.templatePath,
       destinationPath: req.body?.destinationParent,
+      sourceTarget: req.body?.storageTarget,
+      destinationTarget: req.body?.workingTarget,
+      sessionName: req.body?.sessionName,
       error: error.message
     });
     res.status(400).json({ ok: false, error: error.message });

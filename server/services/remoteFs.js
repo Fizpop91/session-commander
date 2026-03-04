@@ -52,3 +52,26 @@ export async function getPathStats(target, remotePath) {
     modifiedEpoch: Number(mtime || 0)
   };
 }
+
+export async function deletePath(target, remotePath) {
+  const safePath = String(remotePath || '').trim();
+  if (!safePath || safePath === '/') {
+    throw new Error('Refusing to delete root path');
+  }
+
+  const command = [
+    `if [ ! -e ${quote(safePath)} ]; then`,
+    '  echo missing',
+    '  exit 1',
+    'fi',
+    `if [ -d ${quote(safePath)} ]; then`,
+    `  rm -rf ${quote(safePath)}`,
+    'else',
+    `  rm -f ${quote(safePath)}`,
+    'fi',
+    'echo deleted'
+  ].join('\n');
+
+  await runRemoteCommand(target, command);
+  return { ok: true };
+}

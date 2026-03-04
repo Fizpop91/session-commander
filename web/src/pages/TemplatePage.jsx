@@ -1,8 +1,19 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowsClockwise, CaretCircleLeft, File, FolderSimple, PlusCircle, Trash, XCircle } from '@phosphor-icons/react';
+import { ArrowFatLineRight, ArrowsClockwise, ArrowsOut, CaretCircleLeft, DesktopTower, File, FolderOpen, FolderSimple, IdentificationCard, Lego, PlusCircle, PlusMinus, Queue, Trash, Wall, XCircle } from '@phosphor-icons/react';
 import { api } from '../lib/api.js';
 
-const DEFAULT_PROJECT_TYPES = ['POD', 'PIC', 'RAD', 'ADR', 'IVR', 'VO', 'AB', 'SFX', 'MTR', 'MIX'];
+const DEFAULT_PROJECT_TYPES = [
+  { name: 'POD', description: 'Podcast' },
+  { name: 'PIC', description: 'To Picture' },
+  { name: 'RAD', description: 'Radio' },
+  { name: 'ADR', description: 'Automated Dialog Replacement' },
+  { name: 'IVR', description: 'Interactive Voice Response (Phone System)' },
+  { name: 'VO', description: 'Voice Over' },
+  { name: 'AB', description: 'TBW' },
+  { name: 'SFX', description: 'Sound Effects Editing' },
+  { name: 'MTR', description: 'Multi Track Recording' },
+  { name: 'MIX', description: 'Music Mix' }
+];
 
 const TOKEN_TYPES = {
   CLIENT_NAME: 'client_name',
@@ -17,6 +28,8 @@ const TOKEN_TYPES = {
 };
 
 const DATE_TOKEN_TYPES = [TOKEN_TYPES.DATE_YYYYMMDD, TOKEN_TYPES.DATE_DDMMYYYY_DOTS];
+const SCHEME_BLOCK_DRAG_TYPE = 'application/x-session-commander-scheme-block-type';
+const SCHEME_ITEM_DRAG_TYPE = 'application/x-session-commander-scheme-item-id';
 
 const SCHEME_BLOCKS = [
   { type: TOKEN_TYPES.CLIENT_NAME, label: 'Client Name' },
@@ -35,8 +48,8 @@ const defaultConfig = {
     host: '',
     port: 22,
     username: '',
-    rootPath: '/var/nfs/shared/Sessions',
-    templateDirectoryPath: '/var/nfs/shared/Sessions'
+    rootPath: '',
+    templateDirectoryPath: ''
   },
   workingLocations: [
     {
@@ -45,7 +58,7 @@ const defaultConfig = {
       host: '',
       port: 22,
       username: '',
-      rootPath: '/mnt/media',
+      rootPath: '',
       isPrimary: true,
       setupState: {
         containerAuthorized: false,
@@ -107,11 +120,11 @@ function normalizeConfig(config) {
     host: config?.storageLocation?.host || '',
     port: Number(config?.storageLocation?.port || 22),
     username: config?.storageLocation?.username || '',
-    rootPath: config?.storageLocation?.rootPath || '/var/nfs/shared/Sessions',
+    rootPath: config?.storageLocation?.rootPath || '',
     templateDirectoryPath:
       config?.storageLocation?.templateDirectoryPath ||
       config?.storageLocation?.rootPath ||
-      '/var/nfs/shared/Sessions'
+      ''
   };
 
   let workingLocations = Array.isArray(config?.workingLocations) && config.workingLocations.length
@@ -121,7 +134,7 @@ function normalizeConfig(config) {
         host: location.host || '',
         port: Number(location.port || 22),
         username: location.username || '',
-        rootPath: location.rootPath || '/mnt/media',
+        rootPath: location.rootPath || '',
         isPrimary: Boolean(location.isPrimary),
         setupState: {
           containerAuthorized: Boolean(location?.setupState?.containerAuthorized),
@@ -171,6 +184,16 @@ function isSetupComplete(config, selectedWorkingLocationId) {
     Boolean(setupState.workingToStorage);
 
   return storageReady && workingReady && trustReady;
+}
+
+function isWorkingLocationReadyForTemplate(location) {
+  if (!hasConfiguredTarget(location)) return false;
+  const setupState = location?.setupState || {};
+  return (
+    Boolean(setupState.containerAuthorized) &&
+    Boolean(setupState.storageToWorking) &&
+    Boolean(setupState.workingToStorage)
+  );
 }
 
 function joinRemotePath(basePath, name) {
@@ -400,6 +423,28 @@ function buildSchemeExample(scheme) {
     .join('');
 }
 
+function normalizeProjectTypes(items) {
+  if (!Array.isArray(items)) return [];
+  const names = new Set();
+  const normalized = [];
+
+  for (const item of items) {
+    const rawName =
+      typeof item === 'string'
+        ? item
+        : item?.name || item?.type || item?.code || '';
+    const name = String(rawName || '').trim().toUpperCase();
+    if (!name || names.has(name)) continue;
+    names.add(name);
+    normalized.push({
+      name,
+      description: typeof item === 'string' ? '' : String(item?.description || '').trim()
+    });
+  }
+
+  return normalized;
+}
+
 export default function TemplatePage() {
   const createActionsRef = useRef(null);
   const [config, setConfig] = useState(defaultConfig);
@@ -435,8 +480,10 @@ export default function TemplatePage() {
   const [projectTypes, setProjectTypes] = useState(DEFAULT_PROJECT_TYPES);
   const [showProjectTypesModal, setShowProjectTypesModal] = useState(false);
   const [projectTypeInput, setProjectTypeInput] = useState('');
+  const [projectTypeDescriptionInput, setProjectTypeDescriptionInput] = useState('');
   const [scheme, setScheme] = useState(getDefaultScheme);
   const [draggingSchemeId, setDraggingSchemeId] = useState(null);
+  const [mouseDraggingSchemeId, setMouseDraggingSchemeId] = useState(null);
   const [draggingBlockType, setDraggingBlockType] = useState('');
   const [dragOverSchemeIndex, setDragOverSchemeIndex] = useState(null);
   const [schemeNameInput, setSchemeNameInput] = useState('');
@@ -479,6 +526,24 @@ export default function TemplatePage() {
     () => isSetupComplete(config, selectedWorkingLocationId),
     [config, selectedWorkingLocationId]
   );
+  const storageConfigured = useMemo(
+    () => hasConfiguredTarget(config.storageLocation),
+    [config.storageLocation]
+  );
+  const storageTemplateConfigured = useMemo(
+    () =>
+      hasConfiguredTarget(config.storageLocation) &&
+      Boolean(config.storageLocation?.templateDirectoryPath?.trim()),
+    [config.storageLocation]
+  );
+  const selectedWorkingConfigured = useMemo(
+    () => hasConfiguredTarget(currentWorkingLocation),
+    [currentWorkingLocation]
+  );
+  const selectedWorkingReady = useMemo(
+    () => isWorkingLocationReadyForTemplate(currentWorkingLocation),
+    [currentWorkingLocation]
+  );
 
   const selectedDateTokenType = useMemo(
     () => scheme.find((item) => DATE_TOKEN_TYPES.includes(item.type))?.type || null,
@@ -486,10 +551,22 @@ export default function TemplatePage() {
   );
 
   const schemeExample = useMemo(() => buildSchemeExample(scheme), [scheme]);
+  const projectTypeNames = useMemo(() => projectTypes.map((item) => item.name), [projectTypes]);
+  const currentSchemeSignature = useMemo(
+    () => JSON.stringify(toStoredScheme(scheme)),
+    [scheme]
+  );
+  const defaultSchemeSignature = useMemo(
+    () => JSON.stringify(toStoredScheme(getDefaultScheme())),
+    []
+  );
   const activeScheme = useMemo(() => {
-    const current = JSON.stringify(toStoredScheme(scheme));
-    return savedSchemes.find((item) => JSON.stringify(item.scheme || []) === current) || null;
-  }, [savedSchemes, scheme]);
+    return savedSchemes.find((item) => JSON.stringify(item.scheme || []) === currentSchemeSignature) || null;
+  }, [savedSchemes, currentSchemeSignature]);
+  const showItalicDefaultSchemeLabel = useMemo(
+    () => !activeScheme && currentSchemeSignature !== defaultSchemeSignature,
+    [activeScheme, currentSchemeSignature, defaultSchemeSignature]
+  );
 
   useEffect(() => {
     let active = true;
@@ -514,11 +591,7 @@ export default function TemplatePage() {
         const loadedSchemes = Array.isArray(loadedConfig?.templateNaming?.schemes)
           ? loadedConfig.templateNaming.schemes
           : [];
-        const loadedProjectTypes = Array.isArray(loadedConfig?.templateNaming?.projectTypes)
-          ? loadedConfig.templateNaming.projectTypes
-              .map((item) => String(item || '').trim())
-              .filter(Boolean)
-          : [];
+        const loadedProjectTypes = normalizeProjectTypes(loadedConfig?.templateNaming?.projectTypes);
         const loadedDefaultSchemeId = loadedConfig?.templateNaming?.defaultSchemeId || '';
         const effectiveProjectTypes = loadedProjectTypes.length ? loadedProjectTypes : DEFAULT_PROJECT_TYPES;
 
@@ -528,9 +601,9 @@ export default function TemplatePage() {
         setSelectedSavedSchemeId(loadedDefaultSchemeId || loadedSchemes[0]?.id || '');
         setNaming((current) => ({
           ...current,
-          projectType: effectiveProjectTypes.includes(current.projectType)
+          projectType: effectiveProjectTypes.some((item) => item.name === current.projectType)
             ? current.projectType
-            : effectiveProjectTypes[0] || 'PIC'
+            : effectiveProjectTypes[0]?.name || 'PIC'
         }));
 
         const defaultPreset = loadedSchemes.find((item) => item.id === loadedDefaultSchemeId);
@@ -540,33 +613,38 @@ export default function TemplatePage() {
 
         const initialPaths = {
           storage: normalized.storageLocation.templateDirectoryPath,
-          working: initialWorkingLocation?.rootPath || '/mnt/media'
+          working: initialWorkingLocation?.rootPath || ''
         };
 
         setPaths(initialPaths);
 
-        if (!isSetupComplete(normalized, normalized.selectedWorkingLocationId)) {
-          setNotice({
-            tone: 'pending',
-            text: 'Configuration must be completed first. Go to Settings and complete all 3 setup steps to continue.'
-          });
-          return;
-        }
+        const initialStorageReady =
+          hasConfiguredTarget(normalized.storageLocation) &&
+          Boolean(normalized.storageLocation?.templateDirectoryPath?.trim());
+        const initialWorkingReady = isWorkingLocationReadyForTemplate(initialWorkingLocation);
 
-        await Promise.all([
-          loadLocationDirectory(
+        if (initialStorageReady) {
+          await loadLocationDirectory(
             'storage',
             initialPaths.storage,
             normalized,
             normalized.selectedWorkingLocationId
-          ),
-          loadLocationDirectory(
+          );
+        } else {
+          setEntries((current) => ({ ...current, storage: [] }));
+        }
+
+        if (initialWorkingReady) {
+          await loadLocationDirectory(
             'working',
             initialPaths.working,
             normalized,
             normalized.selectedWorkingLocationId
-          )
-        ]);
+          );
+        } else {
+          setEntries((current) => ({ ...current, working: [] }));
+          setSelected((current) => ({ ...current, working: null }));
+        }
       } catch (error) {
         if (!active) return;
         setNotice({ tone: 'error', text: `Failed to load template page: ${error.message}` });
@@ -582,13 +660,17 @@ export default function TemplatePage() {
   }, []);
 
   useEffect(() => {
-    if (loadingConfig || !currentWorkingLocation || !setupComplete) return;
+    if (loadingConfig || !currentWorkingLocation) return;
 
     const nextWorkingPath = currentWorkingLocation.rootPath;
     setPaths((current) => ({ ...current, working: nextWorkingPath }));
     setSelected((current) => ({ ...current, working: null }));
-    loadLocationDirectory('working', nextWorkingPath, undefined, currentWorkingLocation.id);
-  }, [loadingConfig, currentWorkingLocation?.id, setupComplete]);
+    if (isWorkingLocationReadyForTemplate(currentWorkingLocation)) {
+      loadLocationDirectory('working', nextWorkingPath, undefined, currentWorkingLocation.id);
+    } else {
+      setEntries((current) => ({ ...current, working: [] }));
+    }
+  }, [loadingConfig, currentWorkingLocation?.id]);
 
   useEffect(() => {
     let active = true;
@@ -629,14 +711,14 @@ export default function TemplatePage() {
   }, [naming.clientName, naming.projectName, naming.projectType, naming.date, scheme]);
 
   useEffect(() => {
-    if (!projectTypes.length) return;
-    if (!projectTypes.includes(naming.projectType)) {
+    if (!projectTypeNames.length) return;
+    if (!projectTypeNames.includes(naming.projectType)) {
       setNaming((current) => ({
         ...current,
-        projectType: projectTypes[0]
+        projectType: projectTypeNames[0]
       }));
     }
-  }, [projectTypes, naming.projectType]);
+  }, [projectTypeNames, naming.projectType]);
 
   useEffect(() => {
     setCompareState({
@@ -677,7 +759,7 @@ export default function TemplatePage() {
       explicitPath ||
       (side === 'storage'
         ? activeConfig.storageLocation.templateDirectoryPath
-        : target?.rootPath || '/mnt/media');
+        : target?.rootPath || '');
 
     if (!target) return;
 
@@ -747,7 +829,7 @@ export default function TemplatePage() {
     const rootPath =
       side === 'storage'
         ? config.storageLocation.templateDirectoryPath
-        : currentWorkingLocation?.rootPath || '/mnt/media';
+        : currentWorkingLocation?.rootPath || '';
     const nextPath = getParentPath(paths[side], rootPath);
     await loadLocationDirectory(side, nextPath, undefined, selectedWorkingLocationId);
   }
@@ -756,7 +838,7 @@ export default function TemplatePage() {
     const rootPath =
       side === 'storage'
         ? config.storageLocation.templateDirectoryPath
-        : currentWorkingLocation?.rootPath || '/mnt/media';
+        : currentWorkingLocation?.rootPath || '';
     await loadLocationDirectory(side, rootPath, undefined, selectedWorkingLocationId);
   }
 
@@ -923,11 +1005,44 @@ export default function TemplatePage() {
     });
   }
 
+  function startSchemeItemDrag(e, itemId) {
+    if (!itemId) return;
+    const targetEl = e.target instanceof Element ? e.target : null;
+    if (targetEl?.closest('input,select,textarea,button')) {
+      return;
+    }
+    setDraggingSchemeId(itemId);
+    e.dataTransfer.setData(SCHEME_ITEM_DRAG_TYPE, itemId);
+    e.dataTransfer.setData('text/plain', itemId);
+    e.dataTransfer.effectAllowed = 'move';
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }
+
+  function endSchemeItemDrag() {
+    setDraggingSchemeId(null);
+    setMouseDraggingSchemeId(null);
+    setDraggingBlockType('');
+    setDragOverSchemeIndex(null);
+  }
+
+  useEffect(() => {
+    if (!mouseDraggingSchemeId) return;
+
+    function handleMouseUp() {
+      if (typeof dragOverSchemeIndex === 'number') {
+        moveSchemeBlockToIndex(mouseDraggingSchemeId, dragOverSchemeIndex);
+      }
+      endSchemeItemDrag();
+    }
+
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, [mouseDraggingSchemeId, dragOverSchemeIndex]);
+
   async function handleSaveProjectTypes(nextProjectTypes) {
-    const sanitized = nextProjectTypes
-      .map((type) => String(type || '').trim().toUpperCase())
-      .filter(Boolean);
-    const unique = [...new Set(sanitized)];
+    const unique = normalizeProjectTypes(nextProjectTypes);
     if (!unique.length) throw new Error('Keep at least one project type');
 
     const nextTemplateNaming = {
@@ -940,19 +1055,23 @@ export default function TemplatePage() {
     setProjectTypes(unique);
     setNaming((current) => ({
       ...current,
-      projectType: unique.includes(current.projectType) ? current.projectType : unique[0]
+      projectType: unique.some((item) => item.name === current.projectType)
+        ? current.projectType
+        : unique[0].name
     }));
   }
 
   async function handleAddProjectType() {
     try {
       const value = String(projectTypeInput || '').trim().toUpperCase();
+      const description = String(projectTypeDescriptionInput || '').trim();
       if (!value) throw new Error('Project type is required');
-      if (projectTypes.includes(value)) throw new Error('Project type already exists');
+      if (projectTypes.some((item) => item.name === value)) throw new Error('Project type already exists');
 
-      const next = [...projectTypes, value];
+      const next = [...projectTypes, { name: value, description }];
       await handleSaveProjectTypes(next);
       setProjectTypeInput('');
+      setProjectTypeDescriptionInput('');
       setNamingNotice({ tone: 'success', text: `Added project type "${value}".` });
     } catch (error) {
       setNamingNotice({ tone: 'error', text: `Add project type failed: ${error.message}` });
@@ -964,7 +1083,7 @@ export default function TemplatePage() {
       if (projectTypes.length <= 1) {
         throw new Error('At least one project type is required');
       }
-      const next = projectTypes.filter((type) => type !== typeToRemove);
+      const next = projectTypes.filter((type) => type.name !== typeToRemove);
       await handleSaveProjectTypes(next);
       setNamingNotice({ tone: 'success', text: `Removed project type "${typeToRemove}".` });
     } catch (error) {
@@ -1127,6 +1246,7 @@ export default function TemplatePage() {
   );
 
   const compareFreshness = compareState.result ? getFreshnessFlags(compareState.result) : null;
+  const sourceToWorkingActive = Boolean(selected.storage && selected.storage.kind === 'directory');
   const destinationIsNewerWarning = Boolean(
     compareState.result?.source?.exists &&
       compareState.result?.destination?.exists &&
@@ -1143,92 +1263,150 @@ export default function TemplatePage() {
     );
   }
 
-  if (!setupComplete) {
-    return (
-      <section className="content">
-        <section className="panel step-panel">
-          <div className="result-banner pending">
-            Configuration must be completed first. Go to Settings and complete all 3 setup steps to
-            continue.
-          </div>
-        </section>
-      </section>
-    );
-  }
-
   return (
     <section className="content">
       <section className="panel hero-panel">
         <div className="panel-header">
           <div>
-            <h2>Create New Session from Template</h2>
+            <h2 className="section-title-with-icon">
+              <FolderOpen size={22} weight="duotone" aria-hidden="true" />
+              Create New Session from Template
+            </h2>
             <p>Choose a template source folder, check destination, then create.</p>
           </div>
         </div>
 
       </section>
 
-      <section className="grid two-col">
-        <BrowserPane
-          title="Template Source"
-          currentPath={paths.storage}
-          rootPath={config.storageLocation.templateDirectoryPath}
-          entries={entries.storage}
-          selectedItem={selected.storage}
-          loading={loading.storage}
-          selectionHint="Select a template to use."
-          showSelected={false}
-          onRefresh={() => loadLocationDirectory('storage', paths.storage, undefined, selectedWorkingLocationId)}
-          onBack={() => handleBackOneLevel('storage')}
-          onRoot={() => handleGoToLocationRoot('storage')}
-          onSelect={(entry) => handleSelectEntry('storage', entry)}
-          onOpenFromEntry={(entry) => handleOpenEntry('storage', entry)}
-          searchable
-        />
+      <section className="grid two-col location-panes-row">
+        {storageTemplateConfigured ? (
+          <BrowserPane
+            title={
+              <span className="pane-title-with-icon pane-title-static">
+                <Queue size={18} weight="duotone" aria-hidden="true" />
+                <span>Template Source</span>
+              </span>
+            }
+            currentPath={paths.storage}
+            rootPath={config.storageLocation.templateDirectoryPath}
+            entries={entries.storage}
+            selectedItem={selected.storage}
+            loading={loading.storage}
+            selectionHint="Select a template to use."
+            showSelected={false}
+            onRefresh={() => loadLocationDirectory('storage', paths.storage, undefined, selectedWorkingLocationId)}
+            onBack={() => handleBackOneLevel('storage')}
+            onRoot={() => handleGoToLocationRoot('storage')}
+            onSelect={(entry) => handleSelectEntry('storage', entry)}
+            onOpenFromEntry={(entry) => handleOpenEntry('storage', entry)}
+            searchable
+          />
+        ) : (
+          <section className="panel step-panel location-unconfigured-card">
+            <div className="panel-header pane-header-align-top">
+              <div className="pane-header-title">
+                <h3 className="pane-title-with-icon pane-title-static">
+                  <Queue size={18} weight="duotone" aria-hidden="true" />
+                  <span>Template Source</span>
+                </h3>
+              </div>
+            </div>
+            <div className="result-banner pending">
+              {storageConfigured
+                ? 'Template Directory Path is not configured. Set it in Settings to browse template source.'
+                : 'This Storage Location is not configured yet. Complete setup in Settings to browse template source.'}
+            </div>
+          </section>
+        )}
 
-        <BrowserPane
-          title={
-            <select
-              className="pane-title-select"
-              value={selectedWorkingLocationId || ''}
-              onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
-              disabled={creating}
-            >
-              {config.workingLocations.map((location) => (
-                <option key={location.id} value={location.id}>
-                  {location.name}
-                  {location.isPrimary ? ' (Primary)' : ''}
-                </option>
-              ))}
-            </select>
-          }
-          currentPath={paths.working}
-          rootPath={currentWorkingLocation?.rootPath || '/mnt/media'}
-          entries={entries.working}
-          selectedItem={selected.working}
-          loading={loading.working}
-          selectionHint="New session folder will be created in the current location path."
-          showSelected={false}
-          onRefresh={() => loadLocationDirectory('working', paths.working, undefined, selectedWorkingLocationId)}
-          onBack={() => handleBackOneLevel('working')}
-          onRoot={() => handleGoToLocationRoot('working')}
-          onSelect={(entry) => handleSelectEntry('working', entry)}
-          onOpenFromEntry={(entry) => handleOpenEntry('working', entry)}
-          searchable
-        />
+        <div className="location-panes-arrow-single" aria-hidden="true">
+          <div className={`location-arrow-tile${sourceToWorkingActive ? ' active' : ''}`}>
+            <ArrowFatLineRight size={22} weight="duotone" />
+          </div>
+        </div>
+
+        {selectedWorkingReady ? (
+          <BrowserPane
+            title={
+              <span className="pane-title-with-icon pane-title-with-select">
+                <DesktopTower size={18} weight="duotone" aria-hidden="true" />
+                <select
+                  className="pane-title-select"
+                  value={selectedWorkingLocationId || ''}
+                  onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
+                  disabled={creating}
+                >
+                  {config.workingLocations.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                      {location.isPrimary ? ' (Primary)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            }
+            currentPath={paths.working}
+            rootPath={currentWorkingLocation?.rootPath || ''}
+            entries={entries.working}
+            selectedItem={selected.working}
+            loading={loading.working}
+            selectionHint="New session folder will be created in the current location path."
+            showSelected={false}
+            onRefresh={() => loadLocationDirectory('working', paths.working, undefined, selectedWorkingLocationId)}
+            onBack={() => handleBackOneLevel('working')}
+            onRoot={() => handleGoToLocationRoot('working')}
+            onSelect={(entry) => handleSelectEntry('working', entry)}
+            onOpenFromEntry={(entry) => handleOpenEntry('working', entry)}
+            searchable
+          />
+        ) : (
+          <section className="panel step-panel location-unconfigured-card">
+            <div className="panel-header pane-header-align-top">
+              <div className="pane-header-title">
+                <span className="pane-title-with-icon pane-title-with-select">
+                  <DesktopTower size={18} weight="duotone" aria-hidden="true" />
+                  <select
+                    className="pane-title-select"
+                    value={selectedWorkingLocationId || ''}
+                    onChange={(e) => setSelectedWorkingLocationId(e.target.value)}
+                    disabled={creating}
+                  >
+                    {config.workingLocations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                        {location.isPrimary ? ' (Primary)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </div>
+            </div>
+            <div className="result-banner pending">
+              {selectedWorkingConfigured
+                ? 'This Working Location is not fully set up yet. Complete authorization and trust steps in Settings.'
+                : 'This Working Location is not configured yet. Complete setup in Settings to browse this location.'}
+            </div>
+          </section>
+        )}
       </section>
 
       <section className="panel step-panel">
-        <div className="panel-header">
-          <div>
-            <h3>Session Name</h3>
+          <div className="panel-header">
+            <div>
+              <h3 className="pane-title-with-icon">
+                <IdentificationCard size={18} weight="duotone" aria-hidden="true" />
+                <span>Session Name</span>
+              </h3>
+            </div>
           </div>
-        </div>
 
         <div className="naming-top-grid">
           <section className="subpanel" style={{ marginTop: 8 }}>
             <div className="scheme-blocks-line">
-              <p><strong>Blocks</strong></p>
+              <h4 className="pane-title-with-icon">
+                <Lego size={18} weight="duotone" aria-hidden="true" />
+                <span>Blocks</span>
+              </h4>
               <div className="scheme-blocks">
               {SCHEME_BLOCKS.map((block) => (
                 <button
@@ -1237,8 +1415,9 @@ export default function TemplatePage() {
                   onClick={() => addSchemeBlock(block.type)}
                   draggable
                   onDragStart={(e) => {
-                    e.dataTransfer.setData('text/plain', block.type);
+                    e.dataTransfer.setData(SCHEME_BLOCK_DRAG_TYPE, block.type);
                     setDraggingBlockType(block.type);
+                    e.dataTransfer.effectAllowed = 'copyMove';
                   }}
                   onDragEnd={() => {
                     setDraggingBlockType('');
@@ -1262,10 +1441,20 @@ export default function TemplatePage() {
             <div className="scheme-manager-row">
               <div className="scheme-manager-text">
                 <div className="scheme-manager-header">
-                  <p><strong>Scheme Management</strong></p>
+                  <h4 className="pane-title-with-icon">
+                    <PlusMinus size={18} weight="duotone" aria-hidden="true" />
+                    <span>Scheme Management</span>
+                  </h4>
                 </div>
                 <p className="scheme-active-label">
-                  <strong>Active Scheme:</strong> {activeScheme?.name || 'None'}
+                  <strong>Active Scheme:</strong>{' '}
+                  {activeScheme?.name ? (
+                    activeScheme.name
+                  ) : showItalicDefaultSchemeLabel ? (
+                    <em>Default</em>
+                  ) : (
+                    'Default'
+                  )}
                 </p>
                 <button className="scheme-manage-button" onClick={() => setShowSchemesModal(true)}>
                   Saved Schemes
@@ -1277,24 +1466,32 @@ export default function TemplatePage() {
 
         <section className="subpanel" style={{ marginTop: 16 }}>
           <div className="scheme-builder-header-row">
-            <p><strong>Scheme Builder (drag to reorder)</strong></p>
+            <h4 className="pane-title-with-icon">
+              <Wall size={18} weight="duotone" aria-hidden="true" />
+              <span>Scheme Builder (drag to reorder)</span>
+            </h4>
             <button className="scheme-manage-button" onClick={() => setShowProjectTypesModal(true)}>
               Edit Project Types
             </button>
           </div>
           <p className="scheme-builder-example"><strong>Example:</strong> {schemeExample || '—'}</p>
           <div
-            className={`scheme-builder-row${draggingSchemeId || draggingBlockType ? ' dragging' : ''}`}
-            onDragOver={(e) => e.preventDefault()}
+            className={`scheme-builder-row${draggingSchemeId || draggingBlockType || mouseDraggingSchemeId ? ' dragging' : ''}${mouseDraggingSchemeId ? ' mouse-dragging' : ''}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (e.target === e.currentTarget) {
+                setDragOverSchemeIndex(scheme.length);
+              }
+            }}
             onDrop={(e) => {
               e.preventDefault();
-              const tokenType = e.dataTransfer.getData('text/plain');
+              if (e.target !== e.currentTarget) return;
+              const tokenType = e.dataTransfer.getData(SCHEME_BLOCK_DRAG_TYPE);
               if (tokenType && SCHEME_BLOCKS.some((block) => block.type === tokenType)) {
                 addSchemeBlock(tokenType);
-              } else if (draggingSchemeId) {
-                moveSchemeBlockToIndex(draggingSchemeId, scheme.length);
               }
               setDraggingBlockType('');
+              setDraggingSchemeId(null);
               setDragOverSchemeIndex(null);
             }}
           >
@@ -1306,29 +1503,87 @@ export default function TemplatePage() {
                     e.preventDefault();
                     setDragOverSchemeIndex(index);
                   }}
+                  onMouseEnter={() => {
+                    if (!mouseDraggingSchemeId) return;
+                    setDragOverSchemeIndex(index);
+                  }}
                   onDrop={(e) => {
                     e.preventDefault();
-                    const tokenType = e.dataTransfer.getData('text/plain');
+                    e.stopPropagation();
+                    const draggedSchemeId =
+                      e.dataTransfer.getData(SCHEME_ITEM_DRAG_TYPE) ||
+                      e.dataTransfer.getData('text/plain') ||
+                      draggingSchemeId ||
+                      '';
+                    const tokenType = e.dataTransfer.getData(SCHEME_BLOCK_DRAG_TYPE);
                     if (tokenType && SCHEME_BLOCKS.some((block) => block.type === tokenType)) {
                       insertSchemeBlockAt(tokenType, index);
-                    } else if (draggingSchemeId) {
-                      moveSchemeBlockToIndex(draggingSchemeId, index);
+                    } else if (draggedSchemeId) {
+                      moveSchemeBlockToIndex(draggedSchemeId, index);
                     }
                     setDraggingBlockType('');
+                    setDraggingSchemeId(null);
                     setDragOverSchemeIndex(null);
                   }}
                 />
                 <div
-                  className="scheme-item"
+                  className={`scheme-item${dragOverSchemeIndex === index ? ' active-drop' : ''}`}
                   draggable
-                  onDragStart={() => setDraggingSchemeId(item.id)}
-                  onDragEnd={() => {
-                    setDraggingSchemeId(null);
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    const targetEl = e.target instanceof Element ? e.target : null;
+                    if (targetEl?.closest('input,select,textarea,button')) {
+                      return;
+                    }
+                    e.preventDefault();
+                    setMouseDraggingSchemeId(item.id);
+                    setDragOverSchemeIndex(index);
+                  }}
+                  onMouseMove={(e) => {
+                    if (!mouseDraggingSchemeId) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const shouldInsertAfter = e.clientX > rect.left + rect.width / 2;
+                    setDragOverSchemeIndex(shouldInsertAfter ? index + 1 : index);
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!mouseDraggingSchemeId) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const shouldInsertAfter = e.clientX > rect.left + rect.width / 2;
+                    setDragOverSchemeIndex(shouldInsertAfter ? index + 1 : index);
+                  }}
+                  onDragStart={(e) => startSchemeItemDrag(e, item.id)}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOverSchemeIndex(index);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const draggedSchemeId =
+                      e.dataTransfer.getData(SCHEME_ITEM_DRAG_TYPE) ||
+                      e.dataTransfer.getData('text/plain') ||
+                      draggingSchemeId ||
+                      '';
+                    const tokenType = e.dataTransfer.getData(SCHEME_BLOCK_DRAG_TYPE);
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const shouldInsertAfter = e.clientX > rect.left + rect.width / 2;
+                    const insertionIndex = shouldInsertAfter ? index + 1 : index;
+
+                    if (tokenType && SCHEME_BLOCKS.some((block) => block.type === tokenType)) {
+                      insertSchemeBlockAt(tokenType, insertionIndex);
+                    } else if (draggedSchemeId) {
+                      moveSchemeBlockToIndex(draggedSchemeId, insertionIndex);
+                    }
+
                     setDraggingBlockType('');
+                    setDraggingSchemeId(null);
                     setDragOverSchemeIndex(null);
                   }}
+                  onDragEnd={endSchemeItemDrag}
                 >
-                  <span className="scheme-item-label">{getTokenLabel(item)}</span>
+                  <span className="scheme-item-label">
+                    {getTokenLabel(item)}
+                  </span>
                   {item.type === TOKEN_TYPES.CLIENT_NAME ? (
                     <input
                       className="scheme-inline-input"
@@ -1354,8 +1609,8 @@ export default function TemplatePage() {
                       onChange={(e) => updateNaming('projectType', e.target.value)}
                     >
                       {projectTypes.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
+                        <option key={type.name} value={type.name}>
+                          {type.name}
                         </option>
                       ))}
                     </select>
@@ -1391,15 +1646,26 @@ export default function TemplatePage() {
                 e.preventDefault();
                 setDragOverSchemeIndex(scheme.length);
               }}
+              onMouseEnter={() => {
+                if (!mouseDraggingSchemeId) return;
+                setDragOverSchemeIndex(scheme.length);
+              }}
               onDrop={(e) => {
                 e.preventDefault();
-                const tokenType = e.dataTransfer.getData('text/plain');
+                e.stopPropagation();
+                const draggedSchemeId =
+                  e.dataTransfer.getData(SCHEME_ITEM_DRAG_TYPE) ||
+                  e.dataTransfer.getData('text/plain') ||
+                  draggingSchemeId ||
+                  '';
+                const tokenType = e.dataTransfer.getData(SCHEME_BLOCK_DRAG_TYPE);
                 if (tokenType && SCHEME_BLOCKS.some((block) => block.type === tokenType)) {
                   insertSchemeBlockAt(tokenType, scheme.length);
-                } else if (draggingSchemeId) {
-                  moveSchemeBlockToIndex(draggingSchemeId, scheme.length);
+                } else if (draggedSchemeId) {
+                  moveSchemeBlockToIndex(draggedSchemeId, scheme.length);
                 }
                 setDraggingBlockType('');
+                setDraggingSchemeId(null);
                 setDragOverSchemeIndex(null);
               }}
             />
@@ -1467,7 +1733,13 @@ export default function TemplatePage() {
                 type="text"
                 value={projectTypeInput}
                 onChange={(e) => setProjectTypeInput(e.target.value)}
-                placeholder="New project type"
+                placeholder="Project Type"
+              />
+              <input
+                type="text"
+                value={projectTypeDescriptionInput}
+                onChange={(e) => setProjectTypeDescriptionInput(e.target.value)}
+                placeholder="Description (optional)"
               />
               <button
                 className="setup-icon-button"
@@ -1481,13 +1753,18 @@ export default function TemplatePage() {
 
             <section className="project-types-list">
               {projectTypes.map((type) => (
-                <div key={type} className="project-types-item">
-                  <strong>{type}</strong>
+                <div key={type.name} className="project-types-item">
+                  <div className="project-types-item-text">
+                    <strong>{type.name}</strong>
+                    {type.description ? (
+                      <span className="project-types-item-description">{type.description}</span>
+                    ) : null}
+                  </div>
                   <button
                     className="setup-icon-button setup-icon-button-danger"
                     title="Remove Project Type"
-                    aria-label={`Remove ${type}`}
-                    onClick={() => handleRemoveProjectType(type)}
+                    aria-label={`Remove ${type.name}`}
+                    onClick={() => handleRemoveProjectType(type.name)}
                   >
                     <Trash size={18} weight="duotone" aria-hidden="true" />
                   </button>
@@ -1498,29 +1775,35 @@ export default function TemplatePage() {
         </div>
       ) : null}
 
-      <section className="panel step-panel">
-        <div className="panel-header">
-          <div>
-            <h3>Create</h3>
-            <p>Compare destination status before creating from template.</p>
+      {setupComplete ? (
+        <section className="panel step-panel">
+          <div className="panel-header create-action-header">
+            <div>
+              <h3 className="pane-title-with-icon">
+                <ArrowsOut size={18} weight="duotone" aria-hidden="true" />
+                <span>Create</span>
+              </h3>
+              <p>Compare destination status before creating from template.</p>
+            </div>
+            <div className="compare-action-row create-action-row-inline">
+              <button
+                className="button-primary"
+                onClick={handleCompare}
+                disabled={!canCompare || comparing || creating}
+              >
+                {comparing ? 'Comparing…' : 'Compare'}
+              </button>
+            </div>
           </div>
-          <button
-            className="button-primary"
-            onClick={handleCompare}
-            disabled={!canCompare || comparing || creating}
-          >
-            {comparing ? 'Checking…' : 'Check'}
-          </button>
-        </div>
 
-        {notice.text ? (
-          <div className="notice-slot">
-            <div className={`result-banner ${notice.tone}`}>{notice.text}</div>
-          </div>
-        ) : null}
+          {notice.text ? (
+            <div className="notice-slot">
+              <div className={`result-banner ${notice.tone}`}>{notice.text}</div>
+            </div>
+          ) : null}
 
-        {compareState.result ? (
-          <section className="subpanel" style={{ marginTop: 16 }} ref={createActionsRef}>
+          {compareState.result ? (
+            <section className="subpanel" style={{ marginTop: 16 }} ref={createActionsRef}>
             <h4>New Session Creation Details</h4>
             <p>
               <strong>Source:</strong>{' '}
@@ -1533,7 +1816,7 @@ export default function TemplatePage() {
               <strong>Destination:</strong>{' '}
               {getReadableLocationPreserveNames(
                 compareState.destinationPath,
-                currentWorkingLocation?.rootPath || '/mnt/media'
+                currentWorkingLocation?.rootPath || ''
               )}
             </p>
 
@@ -1606,9 +1889,10 @@ export default function TemplatePage() {
                 </button>
               ) : null}
             </div>
-          </section>
-        ) : null}
-      </section>
+            </section>
+          ) : null}
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -1723,7 +2007,7 @@ function EntryList({ entries, selectedEntry, onSelect, onOpenFromEntry, emptyTex
     return <p>{emptyText}</p>;
   }
 
-  const hasOverflow = entries.length > 10;
+  const hasOverflow = entries.length > 5;
 
   return (
     <div className={hasOverflow ? 'entry-list-container has-overflow' : 'entry-list-container'}>

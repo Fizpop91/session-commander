@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BellRinging, CaretCircleLeft, DownloadSimple, Eye, EyeClosed, Fingerprint, FloppyDiskBack, FolderOpen, GearSix, Info, PlusCircle, SecurityCamera, ShippingContainer, Trash, UploadSimple, Users, XCircle } from '@phosphor-icons/react';
+import { ArrowCircleRight, BellRinging, CaretCircleLeft, DownloadSimple, Eye, EyeClosed, Fingerprint, FloppyDiskBack, FolderOpen, GearSix, Info, PlusCircle, SecurityCamera, ShippingContainer, Trash, UploadSimple, Users, XCircle } from '@phosphor-icons/react';
 import { api } from '../lib/api.js';
 
 const SETTINGS_TAB_KEYS = {
@@ -34,6 +34,7 @@ const defaultWorkingLocation = (index = 1) => ({
   port: 22,
   username: '',
   rootPath: '',
+  allowDeleteInBrowser: false,
   isPrimary: index === 1,
   setupState: {
     containerAuthorized: false,
@@ -50,7 +51,8 @@ const defaultState = {
     port: 22,
     username: '',
     rootPath: '',
-    templateDirectoryPath: ''
+    templateDirectoryPath: '',
+    allowDeleteInBrowser: false
   },
   workingLocations: [defaultWorkingLocation(1)],
   selectedWorkingLocationId: null,
@@ -67,6 +69,7 @@ function normalizeConfig(config) {
     port: Number(config?.storageLocation?.port || 22),
     username: config?.storageLocation?.username || '',
     rootPath: config?.storageLocation?.rootPath || '',
+    allowDeleteInBrowser: Boolean(config?.storageLocation?.allowDeleteInBrowser),
     templateDirectoryPath:
       config?.storageLocation?.templateDirectoryPath ||
       config?.storageLocation?.rootPath ||
@@ -81,6 +84,7 @@ function normalizeConfig(config) {
         port: Number(drive.port || 22),
         username: drive.username || '',
         rootPath: drive.rootPath || '',
+        allowDeleteInBrowser: Boolean(drive?.allowDeleteInBrowser),
         isPrimary: Boolean(drive.isPrimary),
         setupState: {
           containerAuthorized: Boolean(drive?.setupState?.containerAuthorized),
@@ -278,6 +282,15 @@ export default function SetupPage({
     host: '',
     label: '',
     side: 'storage'
+  });
+  const [removeWorkingLocationModal, setRemoveWorkingLocationModal] = useState({
+    open: false,
+    locationId: '',
+    locationName: '',
+    removeKeys: false,
+    storagePassword: '',
+    workingPassword: '',
+    notice: { tone: 'pending', text: '' }
   });
   const [loadConfigModal, setLoadConfigModal] = useState({
     open: false,
@@ -518,13 +531,22 @@ export default function SetupPage({
     });
   }
 
-  function removeCurrentWorkingLocation() {
+  function openRemoveCurrentWorkingLocationModal() {
     if (!currentWorkingLocation || form.workingLocations.length <= 1) return;
+    setRemoveWorkingLocationModal({
+      open: true,
+      locationId: currentWorkingLocation.id,
+      locationName: currentWorkingLocation.name || 'Working Location',
+      removeKeys: false,
+      storagePassword: '',
+      workingPassword: '',
+      notice: { tone: 'pending', text: '' }
+    });
+  }
 
+  function removeWorkingLocationById(locationId) {
     setForm((current) => {
-      const remaining = current.workingLocations.filter(
-        (drive) => drive.id !== current.selectedWorkingLocationId
-      );
+      const remaining = current.workingLocations.filter((drive) => drive.id !== locationId);
 
       let nextWorkingDrives = remaining;
       if (!remaining.some((drive) => drive.isPrimary)) {
@@ -540,6 +562,67 @@ export default function SetupPage({
         selectedWorkingLocationId: nextWorkingDrives[0]?.id || null
       };
     });
+  }
+
+  async function handleRemoveWorkingLocationConfirmed() {
+    try {
+      setSaving(true);
+      const locationId = removeWorkingLocationModal.locationId;
+      if (!locationId) throw new Error('No working location selected');
+      const workingToRemove = form.workingLocations.find((drive) => drive.id === locationId);
+      if (!workingToRemove) throw new Error('Working location not found');
+      let keyCleanupWarningText = '';
+
+      if (removeWorkingLocationModal.removeKeys) {
+        if (!removeWorkingLocationModal.storagePassword) {
+          throw new Error('Storage location password is required to remove SSH keys');
+        }
+        if (!removeWorkingLocationModal.workingPassword) {
+          throw new Error('Working location password is required to remove SSH keys');
+        }
+
+        const result = await api.removeWorkingLocationKeys({
+          storageTarget: {
+            host: form.storageLocation.host,
+            port: Number(form.storageLocation.port) || 22,
+            username: form.storageLocation.username
+          },
+          storagePassword: removeWorkingLocationModal.storagePassword,
+          workingTarget: {
+            host: workingToRemove.host,
+            port: Number(workingToRemove.port) || 22,
+            username: workingToRemove.username
+          },
+          workingPassword: removeWorkingLocationModal.workingPassword
+        });
+        if (Array.isArray(result?.warnings) && result.warnings.length) {
+          keyCleanupWarningText = ` Warnings: ${result.warnings.join(' | ')}`;
+        }
+      }
+
+      removeWorkingLocationById(locationId);
+      setRemoveWorkingLocationModal({
+        open: false,
+        locationId: '',
+        locationName: '',
+        removeKeys: false,
+        storagePassword: '',
+        workingPassword: '',
+        notice: { tone: 'pending', text: '' }
+      });
+      setGlobalMessage(
+        removeWorkingLocationModal.removeKeys
+          ? `Removed ${workingToRemove.name || 'working location'} and cleared its SSH keys.${keyCleanupWarningText}`
+          : `Removed ${workingToRemove.name || 'working location'}.`
+      );
+    } catch (error) {
+      setRemoveWorkingLocationModal((current) => ({
+        ...current,
+        notice: { tone: 'error', text: error.message }
+      }));
+    } finally {
+      setSaving(false);
+    }
   }
 
   function setCurrentWorkingLocationPrimary() {
@@ -1683,18 +1766,56 @@ export default function SetupPage({
         <p className="setup-intro-lead setup-intro-lead-full">
           Configure your locations below. You can configure multiple working locations.
         </p>
-        <div className="setup-intro">
-          <div className="setup-intro-item">
-            <span className="setup-label-tag">Storage Location</span>
-            <p>Source of session backups and templates.</p>
+        <details className="setup-important-info-expand">
+          <summary>
+            <ArrowCircleRight size={16} weight="duotone" aria-hidden="true" />
+            <span>Important Info</span>
+          </summary>
+          <div className="setup-intro">
+            <div className="setup-intro-item">
+              <span className="setup-label-tag">Storage Location</span>
+              <p>Source of session backups and templates.</p>
+            </div>
+            <div className="setup-intro-item">
+              <span className="setup-label-tag">Working Location</span>
+              <p className="setup-working-line">
+                Location where sessions are run from. This can be a network share or a folder on your local machine.
+              </p>
+            </div>
           </div>
-          <div className="setup-intro-item">
-            <span className="setup-label-tag">Working Location</span>
-            <p className="setup-working-line">
-              Location where sessions are run from. This can be a network share or a folder on your local machine.
-            </p>
+          <div className="result-banner pending setup-mac-note">
+            <strong>Necessary:</strong>
+            <ul className="setup-important-list">
+              <li>For Mac&apos;s, make sure SSH is enabled in System Settings -&gt; General -&gt; Sharing -&gt; Remote Login</li>
+              <li>For new session from template, you need to use actual Pro Tools session folders as templates, not template files within Pro Tools for this to work</li>
+            </ul>
           </div>
-        </div>
+          <div className="result-banner success setup-mac-note">
+            <strong>Recommended:</strong>
+            <ul className="setup-important-list">
+              <li>For Mac&apos;s, make sure Wake for Network Access is enabled in General -&gt; Energy</li>
+              <li>Set static local IP&apos;s for any location you want to configure. If a location&apos;s IP changes, it will break the config</li>
+            </ul>
+          </div>
+          <div className="setup-info-label">
+            <span className="setup-info-label-icon" aria-hidden="true">
+              <Info size={14} weight="duotone" />
+            </span>
+            <span>
+              On a Mac, to get the path of a folder, right click the folder while holding option then
+              select &quot;copy foldername as pathname&quot;
+            </span>
+          </div>
+          <div className="setup-info-label">
+            <span className="setup-info-label-icon" aria-hidden="true">
+              <Info size={14} weight="duotone" />
+            </span>
+            <span>
+              The passwords entered below are not saved anywhere, they are only used for the authorization
+              process and automatically clear when setup is done
+            </span>
+          </div>
+        </details>
       </section>
 
       <section className="panel step-panel">
@@ -1803,6 +1924,18 @@ export default function SetupPage({
                 onChange={(e) => updateStorage('templateDirectoryPath', e.target.value)}
               />
             </label>
+            <div className="notification-checkbox-row" style={{ marginTop: 15 }}>
+              <input
+                id="storage-allow-delete"
+                type="checkbox"
+                checked={Boolean(form.storageLocation.allowDeleteInBrowser)}
+                onChange={(e) => updateStorage('allowDeleteInBrowser', e.target.checked)}
+              />
+              <label htmlFor="storage-allow-delete" className="notification-checkbox-label">
+                Allow delete in browser for Storage Location
+              </label>
+              <InfoIconWithPopover info="Adds a delete button to the browser blocks, allowing you to delete items on the configured location from this app" />
+            </div>
           </section>
           {knownHostsNotice.storage.text ? (
             <div className="notice-slot" style={{ marginTop: 10, marginBottom: 10 }}>
@@ -1829,7 +1962,7 @@ export default function SetupPage({
             <div className="button-row">
               <button
                 className="setup-icon-button setup-icon-button-danger"
-                onClick={removeCurrentWorkingLocation}
+                onClick={openRemoveCurrentWorkingLocationModal}
                 disabled={form.workingLocations.length <= 1}
                 title="Remove Working Location"
                 aria-label="Remove Working Location"
@@ -1923,6 +2056,19 @@ export default function SetupPage({
                   onChange={(e) => updateWorking('rootPath', e.target.value)}
                 />
               </label>
+              <div className="notification-checkbox-row" style={{ marginTop: 15 }}>
+                <input
+                  id="working-allow-delete"
+                  type="checkbox"
+                  checked={Boolean(currentWorkingLocation.allowDeleteInBrowser)}
+                  onChange={(e) => updateWorking('allowDeleteInBrowser', e.target.checked)}
+                />
+                <label htmlFor="working-allow-delete" className="notification-checkbox-label">
+                  Allow delete in browser for this Working Location
+                </label>
+                <InfoIconWithPopover info="Adds a delete button to the browser blocks, allowing you to delete items on the configured location from this app" />
+              </div>
+              <div style={{ height: 8 }} aria-hidden="true" />
             </section>
           ) : null}
           {currentWorkingLocation ? (
@@ -1951,16 +2097,6 @@ export default function SetupPage({
           ) : null}
         </section>
         </section>
-        <div className="result-banner pending setup-mac-note">
-          It is highly advised to set static local IP&apos;s for any location you want to configure.
-          If a location&apos;s IP changes, it will break the config.
-        </div>
-        <div className="result-banner pending setup-mac-note">
-          For Mac&apos;s, make sure SSH is enabled in System Settings -> General -> Sharing ->
-          Remote Login, as well as Wake for Network Access in General -> Energy.
-          To get the path of a folder, right click the folder while holding option, then select
-          "copy foldername as pathname".
-        </div>
       </section>
 
       <section className="panel step-panel">
@@ -1968,23 +2104,12 @@ export default function SetupPage({
           <div className="authorize-header-content">
             <h3>2. Authorize Container Access</h3>
             <p>Authorize the container against the storage location and the selected working location.</p>
-            <div className="setup-info-label">
-              These passwords are not saved anywhere, they are only used for the authorization process
-              and automatically clear when setup is done.
-            </div>
           </div>
           <div className="action-stack">
             <StatusPill
               tone={statusTone(containerDisplayState)}
               label={containerDisplayState === 'done' ? 'Ready' : containerDisplayState === 'error' ? 'Issue' : 'Pending'}
             />
-            <button
-              className="button-primary authorize-button"
-              onClick={handleAuthorizeContainer}
-              disabled={containerAction.loading || !currentWorkingLocation}
-            >
-              {containerAction.loading ? 'Working…' : 'Authorize'}
-            </button>
           </div>
         </div>
 
@@ -2035,16 +2160,36 @@ export default function SetupPage({
           <ResultBanner tone={connectionTest.working.tone} text={connectionTest.working.text} />
         ) : null}
 
-        {containerAction.message ? (
-          <ResultBanner tone={statusTone(containerAction.state)} text={containerAction.message} />
-        ) : selectedSetupState.containerAuthorized && keyStatus.hasContainerKey ? (
-          <ResultBanner tone="success" text="Container access was previously configured for this working location." />
-        ) : selectedSetupState.containerAuthorized && !keyStatus.hasContainerKey ? (
-          <ResultBanner
-            tone="pending"
-            text="Saved config indicates container access was previously configured, but local container SSH keys are missing. Re-authorize container."
-          />
-        ) : null}
+        <div className="authorize-action-row">
+          {containerAction.message ? (
+            <ResultBanner
+              tone={statusTone(containerAction.state)}
+              text={containerAction.message}
+              className="authorize-status-banner-inline"
+            />
+          ) : selectedSetupState.containerAuthorized && keyStatus.hasContainerKey ? (
+            <ResultBanner
+              tone="success"
+              text="Container access was previously configured for these locations."
+              className="authorize-status-banner-inline"
+            />
+          ) : selectedSetupState.containerAuthorized && !keyStatus.hasContainerKey ? (
+            <ResultBanner
+              tone="pending"
+              text="Saved config indicates container access was previously configured, but local container SSH keys are missing. Re-authorize container."
+              className="authorize-status-banner-inline"
+            />
+          ) : (
+            <span className="authorize-action-spacer" />
+          )}
+          <button
+            className="button-primary authorize-button"
+            onClick={handleAuthorizeContainer}
+            disabled={containerAction.loading || !currentWorkingLocation}
+          >
+            {containerAction.loading ? 'Working…' : 'Authorize'}
+          </button>
+        </div>
       </section>
 
       <section className="panel step-panel">
@@ -2068,13 +2213,22 @@ export default function SetupPage({
               />
             </div>
 
-            {storageToWorkingAction.message ? (
-              <ResultBanner tone={statusTone(storageToWorkingAction.state)} text={storageToWorkingAction.message} />
-            ) : resolvedStorageToWorkingTrust ? (
-              <ResultBanner tone="success" text="Storage location trust was previously configured for this working location." />
-            ) : null}
-
-            <div className="trust-enable-row">
+            <div className="trust-action-row">
+              {storageToWorkingAction.message ? (
+                <ResultBanner
+                  tone={statusTone(storageToWorkingAction.state)}
+                  text={storageToWorkingAction.message}
+                  className="trust-status-banner-inline"
+                />
+              ) : resolvedStorageToWorkingTrust ? (
+                <ResultBanner
+                  tone="success"
+                  text="Trust was previously configured."
+                  className="trust-status-banner-inline"
+                />
+              ) : (
+                <span className="trust-action-spacer" />
+              )}
               <button
                 className="button-primary"
                 onClick={handleEnableStorageToWorking}
@@ -2097,13 +2251,22 @@ export default function SetupPage({
               />
             </div>
 
-            {workingToStorageAction.message ? (
-              <ResultBanner tone={statusTone(workingToStorageAction.state)} text={workingToStorageAction.message} />
-            ) : resolvedWorkingToStorageTrust ? (
-              <ResultBanner tone="success" text="Working location trust was previously configured for this working location." />
-            ) : null}
-
-            <div className="trust-enable-row">
+            <div className="trust-action-row">
+              {workingToStorageAction.message ? (
+                <ResultBanner
+                  tone={statusTone(workingToStorageAction.state)}
+                  text={workingToStorageAction.message}
+                  className="trust-status-banner-inline"
+                />
+              ) : resolvedWorkingToStorageTrust ? (
+                <ResultBanner
+                  tone="success"
+                  text="Trust was previously configured."
+                  className="trust-status-banner-inline"
+                />
+              ) : (
+                <span className="trust-action-spacer" />
+              )}
               <button
                 className="button-primary"
                 onClick={handleEnableWorkingToStorage}
@@ -2128,7 +2291,14 @@ export default function SetupPage({
               label={authState.authEnabled ? 'Auth Enabled' : 'Auth Disabled'}
             />
           </div>
-          <section className="subpanel">
+          <section className="subpanel optional-security-subpanel">
+            {!allSetupStepsComplete ? (
+              <StatusPill
+                className="optional-security-step-pill"
+                tone="pending"
+                label="Complete steps above to continue"
+              />
+            ) : null}
             <p>
               <strong>Current Mode:</strong>{' '}
               {authState.authEnabled ? 'Protected (login required)' : 'Open (no login required)'}
@@ -2136,7 +2306,7 @@ export default function SetupPage({
             <p>
               <strong>Admin User Configured:</strong> {authState.hasAdminUser ? 'Yes' : 'No'}
             </p>
-            <div className="button-row" style={{ marginTop: 12, justifyContent: 'flex-start' }}>
+            <div className="button-row optional-security-actions" style={{ marginTop: 12 }}>
               <button className="button-primary" onClick={handleToggleAuth} disabled={authState.loading}>
                 {authState.loading
                   ? 'Saving…'
@@ -2151,11 +2321,6 @@ export default function SetupPage({
                 {authState.authEnabled ? 'Continue' : 'Continue Without Auth'}
               </button>
             </div>
-            {!allSetupStepsComplete ? (
-              <div className="result-banner pending" style={{ marginTop: 10 }}>
-                Complete all 3 setup steps before continuing.
-              </div>
-            ) : null}
           </section>
         </section>
       ) : null}
@@ -2723,6 +2888,10 @@ export default function SetupPage({
               </div>
             </div>
 
+            <p className="muted-line" style={{ marginTop: 10 }}>
+              Upload a config JSON file from your computer, or load a stored config.
+            </p>
+
             {loadConfigModal.mode === 'menu' ? (
               <div className="button-row load-config-menu-actions">
                 <button
@@ -2790,6 +2959,108 @@ export default function SetupPage({
               </button>
               <button className="button-primary" onClick={() => handleClearConfig()} disabled={saving}>
                 {saving ? 'Clearing…' : 'Load Default'}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {removeWorkingLocationModal.open ? (
+        <div
+          className="scheme-modal-backdrop"
+          onClick={() =>
+            setRemoveWorkingLocationModal({
+              open: false,
+              locationId: '',
+              locationName: '',
+              removeKeys: false,
+              storagePassword: '',
+              workingPassword: '',
+              notice: { tone: 'pending', text: '' }
+            })
+          }
+        >
+          <section className="scheme-modal save-config-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h4>Remove Working Location</h4>
+              <ModalCloseButton
+                onClick={() =>
+                  setRemoveWorkingLocationModal({
+                    open: false,
+                    locationId: '',
+                    locationName: '',
+                    removeKeys: false,
+                    storagePassword: '',
+                    workingPassword: '',
+                    notice: { tone: 'pending', text: '' }
+                  })
+                }
+              />
+            </div>
+            <p>
+              Remove <strong>{removeWorkingLocationModal.locationName}</strong> from configuration?
+            </p>
+            <div className="notification-checkbox-row" style={{ marginTop: 10 }}>
+              <input
+                id="remove-working-location-keys"
+                type="checkbox"
+                checked={Boolean(removeWorkingLocationModal.removeKeys)}
+                onChange={(e) =>
+                  setRemoveWorkingLocationModal((current) => ({
+                    ...current,
+                    removeKeys: e.target.checked,
+                    notice: { tone: 'pending', text: '' }
+                  }))
+                }
+              />
+              <label htmlFor="remove-working-location-keys" className="notification-checkbox-label">
+                Also remove SSH keys for this location
+              </label>
+            </div>
+
+            {removeWorkingLocationModal.removeKeys ? (
+              <>
+                <label style={{ marginTop: 12 }}>
+                  Storage Location {form.storageLocation.username ? `${form.storageLocation.username} ` : ''}Password
+                  <PasswordField
+                    value={removeWorkingLocationModal.storagePassword}
+                    onChange={(e) =>
+                      setRemoveWorkingLocationModal((current) => ({
+                        ...current,
+                        storagePassword: e.target.value
+                      }))
+                    }
+                  />
+                </label>
+                <label style={{ marginTop: 12 }}>
+                  {removeWorkingLocationModal.locationName}{' '}
+                  {form.workingLocations.find((drive) => drive.id === removeWorkingLocationModal.locationId)?.username
+                    ? `${form.workingLocations.find((drive) => drive.id === removeWorkingLocationModal.locationId)?.username} `
+                    : ''}Password
+                  <PasswordField
+                    value={removeWorkingLocationModal.workingPassword}
+                    onChange={(e) =>
+                      setRemoveWorkingLocationModal((current) => ({
+                        ...current,
+                        workingPassword: e.target.value
+                      }))
+                    }
+                  />
+                </label>
+              </>
+            ) : null}
+
+            {removeWorkingLocationModal.notice.text ? (
+              <ResultBanner tone={removeWorkingLocationModal.notice.tone} text={removeWorkingLocationModal.notice.text} />
+            ) : null}
+
+            <div className="button-row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
+              <button
+                className="button-primary"
+                onClick={handleRemoveWorkingLocationConfirmed}
+                disabled={saving}
+              >
+                {saving ? 'Working…' : 'Remove Location'}
               </button>
             </div>
           </section>
@@ -2929,8 +3200,8 @@ function StatusPill({ tone, label, className = '' }) {
   return <span className={`status-pill ${tone} ${className}`.trim()}>{label}</span>;
 }
 
-function ResultBanner({ tone, text }) {
-  return <div className={`result-banner ${tone}`}>{text}</div>;
+function ResultBanner({ tone, text, className = '' }) {
+  return <div className={`result-banner ${tone} ${className}`.trim()}>{text}</div>;
 }
 
 function LabelWithInfo({ label, info }) {

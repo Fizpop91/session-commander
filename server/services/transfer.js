@@ -47,6 +47,17 @@ function createJob(type) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+  Object.defineProperty(job, '_progressMeta', {
+    value: {
+      startedAtMs: Date.now(),
+      totalBytes: 0,
+      completedBytes: 0,
+      inFlightBytes: 0,
+      seenXfrIds: new Set()
+    },
+    enumerable: false,
+    writable: true
+  });
 
   jobs.set(jobId, job);
   return job;
@@ -72,7 +83,7 @@ function appendJobLog(jobId, line) {
 }
 
 function parseHumanSizeToBytes(value) {
-  const text = String(value || '').trim();
+  const text = String(value || '').trim().replace(/,/g, '');
   const match = text.match(/^([\d.]+)\s*([KMGTPE]?)(B)?$/i);
 
   if (!match) return 0;
@@ -100,23 +111,100 @@ function parseRsyncProgressLine(line) {
   if (!cleaned) return null;
 
   const match = cleaned.match(
-    /^\s*([\d.]+[KMGTPE]?B?)\s+(\d+)%\s+([^\s]+\/s)\s+([0-9:]+)(?:\s+\(xfr#.*\))?\s*$/
+    /^\s*([\d.,]+[KMGTPE]?B?)\s+\d+%\s+([^\s]+\/s)\s+([0-9:]+)(?:\s+\(xfr#(\d+),.*\))?\s*$/
   );
 
   if (!match) return null;
 
-  const [, transferredText, percentText, speedText, etaText] = match;
+  const [, transferredText, speedText, etaText, xfrIdText] = match;
 
   return {
-    transferredBytes: parseHumanSizeToBytes(transferredText),
-    percent: Number(percentText) || 0,
+    chunkBytes: parseHumanSizeToBytes(transferredText),
+    xfrId: Number(xfrIdText) || 0,
     speedText,
     etaText
   };
 }
 
+function formatRate(bytesPerSecond) {
+  const value = Number(bytesPerSecond);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const decimals = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(decimals)}${units[index]}`;
+}
+
+function formatEta(seconds) {
+  const totalSeconds = Math.max(0, Math.round(Number(seconds) || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function updateProgressFromRsyncLine(job, parsed) {
+  if (!job || !parsed) return;
+
+  const meta = job._progressMeta || {
+    startedAtMs: Date.now(),
+    totalBytes: 0,
+    completedBytes: 0,
+    inFlightBytes: 0,
+    seenXfrIds: new Set()
+  };
+
+  if (parsed.xfrId > 0) {
+    if (!meta.seenXfrIds.has(parsed.xfrId)) {
+      meta.seenXfrIds.add(parsed.xfrId);
+      meta.completedBytes += parsed.chunkBytes;
+    }
+    meta.inFlightBytes = 0;
+  } else {
+    // Interim rsync lines are per-file, so keep only the max until file completion (xfr# line).
+    meta.inFlightBytes = Math.max(meta.inFlightBytes, parsed.chunkBytes);
+  }
+
+  const transferredBytes = Math.max(0, meta.completedBytes + meta.inFlightBytes);
+  const elapsedSeconds = Math.max(1, (Date.now() - meta.startedAtMs) / 1000);
+  const averageBytesPerSecond = transferredBytes / elapsedSeconds;
+  const percent =
+    meta.totalBytes > 0 ? Math.min(100, Math.round((transferredBytes / meta.totalBytes) * 100)) : 0;
+  const etaSeconds =
+    meta.totalBytes > transferredBytes && averageBytesPerSecond > 0
+      ? (meta.totalBytes - transferredBytes) / averageBytesPerSecond
+      : 0;
+
+  job.progress = {
+    ...job.progress,
+    transferredBytes,
+    percent,
+    speedText: formatRate(averageBytesPerSecond),
+    etaText: meta.totalBytes > transferredBytes ? formatEta(etaSeconds) : ''
+  };
+  job.updatedAt = new Date().toISOString();
+}
+
 function wireProgressParsing(jobId, stream, label) {
   let buffer = '';
+  const handleLine = (rawLine) => {
+    const line = String(rawLine || '').trimEnd();
+    if (!line) return;
+
+    appendJobLog(jobId, `${label}: ${line}`);
+
+    const parsed = parseRsyncProgressLine(line);
+    if (!parsed) return;
+
+    const job = jobs.get(jobId);
+    if (!job) return;
+    updateProgressFromRsyncLine(job, parsed);
+  };
 
   stream.on('data', (chunk) => {
     const text = chunk.toString('utf8');
@@ -125,43 +213,13 @@ function wireProgressParsing(jobId, stream, label) {
     const parts = buffer.split(/\r|\n/);
     buffer = parts.pop() || '';
 
-    for (const rawLine of parts) {
-      const line = rawLine.trimEnd();
-      if (!line) continue;
-
-      appendJobLog(jobId, `${label}: ${line}`);
-
-      const parsed = parseRsyncProgressLine(line);
-      if (parsed) {
-        const job = jobs.get(jobId);
-        if (job) {
-          job.progress = {
-            ...job.progress,
-            ...parsed
-          };
-          job.updatedAt = new Date().toISOString();
-        }
-      }
-    }
+    for (const rawLine of parts) handleLine(rawLine);
   });
 
   stream.on('end', () => {
     const line = buffer.trim();
     if (!line) return;
-
-    appendJobLog(jobId, `${label}: ${line}`);
-
-    const parsed = parseRsyncProgressLine(line);
-    if (parsed) {
-      const job = jobs.get(jobId);
-      if (job) {
-        job.progress = {
-          ...job.progress,
-          ...parsed
-        };
-        job.updatedAt = new Date().toISOString();
-      }
-    }
+    handleLine(line);
   });
 }
 
@@ -222,7 +280,7 @@ async function ensureParentExists(target, destinationPath) {
 }
 
 function buildRsyncRemoteTarget(target, remotePath) {
-  return `${target.username}@${target.host}:${quote(remotePath)}`;
+  return `${target.username}@${target.host}:${String(remotePath || '')}`;
 }
 
 function buildPeerSshTarget(target) {
@@ -276,7 +334,15 @@ async function resolveWorkingPeerKeyForRsync(sourceTarget, destinationTarget) {
   );
 }
 
-function buildRsyncCommand(sourcePath, destinationTarget, destinationPath, keyPath) {
+function getRemoteParentPath(remotePath) {
+  const normalized = String(remotePath || '').replace(/\/+$/, '');
+  const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash <= 0) return '/';
+  return normalized.slice(0, lastSlash);
+}
+
+function buildRsyncCommand(sourcePath, destinationTarget, destinationPath, keyPath, options = {}) {
+  const { copySourceDirToDestinationParent = false } = options;
   const sshTransport = [
     'ssh',
     '-T',
@@ -294,6 +360,12 @@ function buildRsyncCommand(sourcePath, destinationTarget, destinationPath, keyPa
     String(destinationTarget.port || 22)
   ].join(' ');
   const quotedSshTransport = `"${sshTransport.replace(/"/g, '\\"')}"`;
+  const sourceArg = copySourceDirToDestinationParent
+    ? quote(String(sourcePath || '').replace(/\/+$/, ''))
+    : `${quote(sourcePath)}/`;
+  const destinationArg = copySourceDirToDestinationParent
+    ? quote(buildRsyncRemoteTarget(destinationTarget, `${getRemoteParentPath(destinationPath)}/`))
+    : quote(buildRsyncRemoteTarget(destinationTarget, destinationPath));
 
   return [
     'rsync',
@@ -303,8 +375,8 @@ function buildRsyncCommand(sourcePath, destinationTarget, destinationPath, keyPa
     '--rsync-path=rsync',
     '-e',
     quotedSshTransport,
-    `${quote(sourcePath)}/`,
-    buildRsyncRemoteTarget(destinationTarget, destinationPath)
+    sourceArg,
+    destinationArg
   ].join(' ');
 }
 
@@ -340,35 +412,17 @@ function buildTarCopyCommand(sourcePath, destinationTarget, destinationPath, key
   ].join(' ');
 }
 
-function runRsyncOverSsh(jobId, sourceTarget, sourcePath, destinationTarget, destinationPath) {
+function runRsyncOverSsh(jobId, sourceTarget, sourcePath, destinationTarget, destinationPath, options = {}) {
   return new Promise((resolve, reject) => {
     const start = async () => {
       const selectedKey = await resolveWorkingPeerKeyForRsync(sourceTarget, destinationTarget);
-      const hasSpaceInPath = /\s/.test(String(sourcePath || '')) || /\s/.test(String(destinationPath || ''));
-
-      if (hasSpaceInPath) {
-        appendJobLog(jobId, 'stdout: path contains spaces, using tar-over-ssh transfer mode');
-        appendJobLog(jobId, `stdout: source=${sourcePath}`);
-        appendJobLog(jobId, `stdout: destination=${destinationPath}`);
-        const tarCommand = buildTarCopyCommand(
-          sourcePath,
-          destinationTarget,
-          destinationPath,
-          selectedKey
-        );
-        const tarResult = await runRemoteCommand(sourceTarget, tarCommand);
-        if (tarResult?.stdout) appendJobLog(jobId, `stdout: ${tarResult.stdout}`);
-        if (tarResult?.stderr) appendJobLog(jobId, `stderr: ${tarResult.stderr}`);
-        appendJobLog(jobId, 'stdout: tar-over-ssh transfer completed');
-        resolve({ method: 'tar-over-ssh' });
-        return;
-      }
 
       const remoteCommand = buildRsyncCommand(
         sourcePath,
         destinationTarget,
         destinationPath,
-        selectedKey
+        selectedKey,
+        options
       );
       const recentOutputLines = [];
       const rememberLines = (chunk) => {
@@ -464,9 +518,18 @@ async function executeTransferJob({
       phase: 'preparing',
       progress: {
         ...jobs.get(jobId)?.progress,
+        percent: 0,
         transferredBytes: 0
       }
     });
+    const meta = jobs.get(jobId)?._progressMeta;
+    if (meta) {
+      meta.startedAtMs = Date.now();
+      meta.totalBytes = estimatedBytes;
+      meta.completedBytes = 0;
+      meta.inFlightBytes = 0;
+      meta.seenXfrIds = new Set();
+    }
 
     await deleteIfRequested(destinationTarget, destinationPath, existingMode);
     await ensureParentExists(destinationTarget, destinationPath);
@@ -480,7 +543,8 @@ async function executeTransferJob({
       sourceTarget,
       sourcePath,
       destinationTarget,
-      destinationPath
+      destinationPath,
+      { copySourceDirToDestinationParent: true }
     );
 
     updateJob(jobId, {
@@ -519,7 +583,11 @@ async function executeTransferJob({
       transferType: type,
       outcome: 'completed',
       sourcePath,
-      destinationPath
+      destinationPath,
+      sourceTarget,
+      destinationTarget,
+      sizeBytes:
+        Number(jobs.get(jobId)?.progress?.transferredBytes || 0) || Number(estimatedBytes || 0)
     });
   } catch (error) {
     updateJob(jobId, {
@@ -532,6 +600,9 @@ async function executeTransferJob({
       outcome: 'failed',
       sourcePath,
       destinationPath,
+      sourceTarget,
+      destinationTarget,
+      sizeBytes: Number(estimatedBytes || 0),
       error: error.message
     });
   }
@@ -653,8 +724,13 @@ export async function createFromTemplate(payload = {}) {
 
   const sessionName = buildSessionName({ clientName, projectName, projectType, date, scheme });
   const destinationPath = `${destinationParent}/${sessionName}`;
+  const sourceTemplateName = path.posix.basename(String(templatePath || '').replace(/\/+$/, ''));
+  const copiedTemplatePath = `${destinationParent}/${sourceTemplateName}`;
 
   await deleteIfRequested(resolved.workingTarget, destinationPath, existingMode);
+  if (copiedTemplatePath !== destinationPath) {
+    await deleteIfRequested(resolved.workingTarget, copiedTemplatePath, existingMode);
+  }
   await runRemoteCommand(resolved.workingTarget, `mkdir -p ${quote(destinationParent)}`);
 
   await runRsyncOverSsh(
@@ -662,8 +738,16 @@ export async function createFromTemplate(payload = {}) {
     resolved.storageTarget,
     templatePath,
     resolved.workingTarget,
-    destinationPath
+    destinationPath,
+    { copySourceDirToDestinationParent: true }
   );
+
+  if (copiedTemplatePath !== destinationPath) {
+    await runRemoteCommand(
+      resolved.workingTarget,
+      `mv ${quote(copiedTemplatePath)} ${quote(destinationPath)}`
+    );
+  }
 
   const inspectCommand = [
     `ptx_matches=$(find ${quote(destinationPath)} -type d -name 'Session File Backups' -prune -o -type f -name '*.ptx' -print)`,

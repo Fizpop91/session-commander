@@ -6,7 +6,8 @@
     "port": 22,
     "username": "",
     "rootPath": "",
-    "templateDirectoryPath": ""
+    "templateDirectoryPath": "",
+    "allowDeleteInBrowser": false
   },
   "workingLocations": [
     {
@@ -16,6 +17,7 @@
       "port": 22,
       "username": "",
       "rootPath": "",
+      "allowDeleteInBrowser": false,
       "isPrimary": true,
       "setupState": {
         "containerAuthorized": false,
