@@ -4,6 +4,8 @@ services:
     container_name: session-commander
     ports:
       - "3000:3000"
+    environment:
+#     - SESSION_COMMANDER_SECRET_KEY=<secret-key>
     volumes:
       - ./data:/app/data
     restart: unless-stopped
