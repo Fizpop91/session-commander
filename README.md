@@ -15,7 +15,7 @@ from any computer on the network without needing to involve the working location
 
 This means a studio assistant/producer can make sure the next session is available on the relevant studio's machine while the engineer is working.
 This is especially useful if the engineer has back-to-back sessions and saves time on the restore/backup process.
-
+0
 The tool also has a very handy drag-and-drop naming scheme builder for session naming, which applies to the session folder as well as the `.ptx` file.
 Multiple naming schemes can also be saved if necessary.
 ![header](screenshots/session-name-scheme.png)
@@ -25,10 +25,10 @@ Multiple naming schemes can also be saved if necessary.
 
 ---
 
-- [Docker Container Setup](https://github.com/Fizpop91/session-commander/blob/main/wiki/docker-container-setup.md)
+- [Docker Container Setup](https://github.com/Fizpop91/session-commander/wiki/Docker-Container-Setup)
 
-- [App Setup Process](https://github.com/Fizpop91/session-commander/blob/main/wiki/app-setup-process.md)
+- [App Setup Process](https://github.com/Fizpop91/session-commander/wiki/Setup-Process)
 
-- [Email Notifications](https://github.com/Fizpop91/session-commander/blob/main/wiki/email-setup.md)
+- [Email Notifications](https://github.com/Fizpop91/session-commander/wiki/Email-Notifications)
 
-- [App Usage](https://github.com/Fizpop91/session-commander/blob/main/wiki/app-usage.md)
+- [App Usage](https://github.com/Fizpop91/session-commander/wiki/App-Usage)
